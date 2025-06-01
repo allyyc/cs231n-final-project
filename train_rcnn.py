@@ -1,3 +1,5 @@
+from comet_ml import Experiment
+
 import torch
 from torch.utils.data import DataLoader
 import torchvision
@@ -9,7 +11,7 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 import os
 from PIL import Image
 
-from comet_ml import Experiment
+from torchmetrics.detection import MeanAveragePrecision
 
 # Initialize the experiment
 experiment = Experiment(api_key=os.getenv("COMET_API_KEY"))
@@ -113,6 +115,9 @@ optimizer = torch.optim.SGD(
     model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005
 )
 
+# Define the metric
+metric = MeanAveragePrecision()
+
 # Define the learning rate scheduler
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
@@ -152,6 +157,8 @@ for epoch in range(num_epochs):
     val_box_loss = 0.0
     with torch.no_grad():
         for images, targets in val_loader:
+
+            # Calculate loss and mAP
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -162,15 +169,20 @@ for epoch in range(num_epochs):
             val_class_loss += loss_dict["loss_classifier"].item()
             val_box_loss += loss_dict["loss_box_reg"].item()
 
+    # Calculate mAP
+    results = metric.compute()
+    map_50 = results["map_50"]
+
     # Average the losses
     avg_val_loss = val_loss / len(val_loader)
     avg_val_class_loss = val_class_loss / len(val_loader)
     avg_val_box_loss = val_box_loss / len(val_loader)
 
     print(
-        f"Epoch {epoch+1}/{num_epochs}, Train loss: {avg_train_loss}, Train class loss: {avg_train_class_loss}, Train box loss: {avg_train_box_loss}, Val loss: {avg_val_loss}, Val class loss: {avg_val_class_loss}, Val box loss: {avg_val_box_loss}"
+        f"Epoch {epoch+1}/{num_epochs}, Train loss: {avg_train_loss}, Train class loss: {avg_train_class_loss}, Train box loss: {avg_train_box_loss}, Val loss: {avg_val_loss}, Val class loss: {avg_val_class_loss}, Val box loss: {avg_val_box_loss}, mAP@50: {map_50}"
     )
 
+    experiment.log_metric("mAP@50", map_50, step=epoch)
     experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
     experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
     experiment.log_metric(
