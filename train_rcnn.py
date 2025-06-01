@@ -290,10 +290,11 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
         except FileNotFoundError:
             print(f"Warning: Label file {label_path} not found")
 
-        # If no boxes were found, add a dummy box
         if len(boxes) == 0:
-            labels.append(0)
-            boxes.append([0, 0, 0, 0])
+            return (
+                torch.zeros((0, 4), dtype=torch.float32),
+                torch.zeros((0,), dtype=torch.int64),
+            )
 
         return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
             labels, dtype=torch.int64
