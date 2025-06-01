@@ -292,13 +292,8 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
 
         # If no boxes were found, add a dummy box
         if len(boxes) == 0:
-            # Add a small box in the corner with background class (0)
-            boxes = [[0, 0, 10, 10]]
-            labels = [0]  # Background class
-
-        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
-            labels, dtype=torch.int64
-        )
+            labels.append(0)
+            boxes.append([0, 0, 0, 0])
 
     def __getitem__(self, idx):
         image_path = os.path.join(self.image_dir, self.image_files[idx])
