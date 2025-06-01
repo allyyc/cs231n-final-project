@@ -99,10 +99,13 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
         image = Image.open(image_path).convert("RGB")
         img_width, img_height = image.size
         boxes, labels = self.__load_labels(label_path, img_width, img_height)
-
-        if self.transform:
-            image = self.transform(image)
         target = {"boxes": boxes, "labels": labels}
+
+        if self.transform is not None:
+            if isinstance(self.transform, YOLOAugmentation):
+                image, target = self.transform(image, target)
+            else:
+                image = self.transform(image)
 
         return image, target
 
@@ -359,24 +362,20 @@ class YOLOAugmentation:
 full_train_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/train",
     label_dir="wm_barriers_data/labels/train",
-    transform=T.Compose(
-        [
-            YOLOAugmentation(
-                hsv_h=0.015,
-                hsv_s=0.7,
-                hsv_v=0.4,
-                degrees=10.0,
-                translate=0.1,
-                scale=0.5,
-                shear=0.0,
-                perspective=0.0,
-                flipud=0.0,
-                fliplr=0.5,
-                mosaic=0.0,
-                mixup=0.0,
-                cutmix=0.0,
-            )
-        ]
+    transform=YOLOAugmentation(
+        hsv_h=0.015,
+        hsv_s=0.7,
+        hsv_v=0.4,
+        degrees=10.0,
+        translate=0.1,
+        scale=0.5,
+        shear=0.0,
+        perspective=0.0,
+        flipud=0.0,
+        fliplr=0.5,
+        mosaic=0.0,
+        mixup=0.0,
+        cutmix=0.0,
     ),
 )
 
