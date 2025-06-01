@@ -11,6 +11,10 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 import os
 from PIL import Image
 from tqdm import tqdm
+import random
+import numpy as np
+import cv2
+from torchvision.transforms import functional as F
 
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -103,22 +107,288 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
         return image, target
 
 
+class YOLOAugmentation:
+    def __init__(
+        self,
+        hsv_h=0.015,
+        hsv_s=0.7,
+        hsv_v=0.4,
+        degrees=0.0,
+        translate=0.1,
+        scale=0.5,
+        shear=0.0,
+        perspective=0.0,
+        flipud=0.0,
+        fliplr=0.5,
+        mosaic=1.0,
+        mixup=0.0,
+        cutmix=0.0,
+    ):
+        self.hsv_h = hsv_h
+        self.hsv_s = hsv_s
+        self.hsv_v = hsv_v
+        self.degrees = degrees
+        self.translate = translate
+        self.scale = scale
+        self.shear = shear
+        self.perspective = perspective
+        self.flipud = flipud
+        self.fliplr = fliplr
+        self.mosaic = mosaic
+        self.mixup = mixup
+        self.cutmix = cutmix
+
+    def __call__(self, image, target):
+        # Convert PIL image to numpy array for OpenCV operations
+        img = np.array(image)
+
+        # HSV augmentation
+        if random.random() < 0.5:
+            r = np.random.uniform(-1, 1, 3) * [self.hsv_h, self.hsv_s, self.hsv_v] + 1
+            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_RGB2HSV))
+            dtype = img.dtype
+            x = np.arange(0, 256, dtype=np.int16)
+            lut_hue = ((x * r[0]) % 180).astype(dtype)
+            lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+            lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+            img_hsv = cv2.merge(
+                (cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))
+            )
+            img = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB)
+
+        # Convert back to PIL for torchvision transforms
+        image = Image.fromarray(img)
+
+        # Random rotation
+        if self.degrees > 0:
+            angle = random.uniform(-self.degrees, self.degrees)
+            image, target = self._rotate_image_and_boxes(image, target, angle)
+
+        # Random translation
+        if self.translate > 0:
+            translate_x = random.uniform(-self.translate, self.translate)
+            translate_y = random.uniform(-self.translate, self.translate)
+            image, target = self._translate_image_and_boxes(
+                image, target, translate_x, translate_y
+            )
+
+        # Random scale
+        if self.scale > 0:
+            scale = random.uniform(1 - self.scale, 1 + self.scale)
+            image, target = self._scale_image_and_boxes(image, target, scale)
+
+        # Random shear
+        if self.shear > 0:
+            shear_x = random.uniform(-self.shear, self.shear)
+            shear_y = random.uniform(-self.shear, self.shear)
+            image, target = self._shear_image_and_boxes(image, target, shear_x, shear_y)
+
+        # Random perspective
+        if self.perspective > 0:
+            image, target = self._perspective_transform(image, target)
+
+        # Random flips
+        if random.random() < self.flipud:
+            image, target = self._flip_vertical(image, target)
+        if random.random() < self.fliplr:
+            image, target = self._flip_horizontal(image, target)
+
+        # Convert to tensor
+        image = F.to_tensor(image)
+
+        return image, target
+
+    def _rotate_image_and_boxes(self, image, target, angle):
+        # Get image dimensions
+        w, h = image.size
+        # Rotate image
+        image = F.rotate(image, angle)
+        # Rotate boxes
+        boxes = target["boxes"]
+        if len(boxes) > 0:
+            # Convert boxes to center format
+            cx = (boxes[:, 0] + boxes[:, 2]) / 2
+            cy = (boxes[:, 1] + boxes[:, 3]) / 2
+            width = boxes[:, 2] - boxes[:, 0]
+            height = boxes[:, 3] - boxes[:, 1]
+
+            # Rotate centers
+            angle_rad = angle * np.pi / 180
+            cos_a = np.cos(angle_rad)
+            sin_a = np.sin(angle_rad)
+
+            # Calculate new centers
+            cx_new = cx * cos_a - cy * sin_a + w / 2 * (1 - cos_a) + h / 2 * sin_a
+            cy_new = cx * sin_a + cy * cos_a + h / 2 * (1 - cos_a) - w / 2 * sin_a
+
+            # Convert back to box format
+            boxes[:, 0] = cx_new - width / 2
+            boxes[:, 1] = cy_new - height / 2
+            boxes[:, 2] = cx_new + width / 2
+            boxes[:, 3] = cy_new + height / 2
+
+            # Clip boxes to image boundaries
+            boxes[:, 0] = torch.clamp(boxes[:, 0], 0, w)
+            boxes[:, 1] = torch.clamp(boxes[:, 1], 0, h)
+            boxes[:, 2] = torch.clamp(boxes[:, 2], 0, w)
+            boxes[:, 3] = torch.clamp(boxes[:, 3], 0, h)
+
+            target["boxes"] = boxes
+
+        return image, target
+
+    def _translate_image_and_boxes(self, image, target, translate_x, translate_y):
+        w, h = image.size
+        translate_x = int(w * translate_x)
+        translate_y = int(h * translate_y)
+
+        # Translate image
+        image = F.affine(
+            image, angle=0, translate=(translate_x, translate_y), scale=1.0, shear=0
+        )
+
+        # Translate boxes
+        boxes = target["boxes"]
+        if len(boxes) > 0:
+            boxes[:, 0] += translate_x
+            boxes[:, 1] += translate_y
+            boxes[:, 2] += translate_x
+            boxes[:, 3] += translate_y
+
+            # Clip boxes to image boundaries
+            boxes[:, 0] = torch.clamp(boxes[:, 0], 0, w)
+            boxes[:, 1] = torch.clamp(boxes[:, 1], 0, h)
+            boxes[:, 2] = torch.clamp(boxes[:, 2], 0, w)
+            boxes[:, 3] = torch.clamp(boxes[:, 3], 0, h)
+
+            target["boxes"] = boxes
+
+        return image, target
+
+    def _scale_image_and_boxes(self, image, target, scale):
+        w, h = image.size
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+
+        # Scale image
+        image = F.resize(image, (new_h, new_w))
+
+        # Scale boxes
+        boxes = target["boxes"]
+        if len(boxes) > 0:
+            boxes[:, 0] *= scale
+            boxes[:, 1] *= scale
+            boxes[:, 2] *= scale
+            boxes[:, 3] *= scale
+            target["boxes"] = boxes
+
+        return image, target
+
+    def _shear_image_and_boxes(self, image, target, shear_x, shear_y):
+        # Convert shear to degrees
+        shear_x = shear_x * 180 / np.pi
+        shear_y = shear_y * 180 / np.pi
+
+        # Shear image
+        image = F.affine(
+            image, angle=0, translate=(0, 0), scale=1.0, shear=(shear_x, shear_y)
+        )
+
+        # TODO: Implement box shearing (complex transformation)
+        # For now, we'll just return the sheared image with original boxes
+        return image, target
+
+    def _perspective_transform(self, image, target):
+        w, h = image.size
+        # Generate random perspective transform
+        startpoints = [[0, 0], [w, 0], [0, h], [w, h]]
+        endpoints = [
+            [
+                random.uniform(-w * self.perspective, w * self.perspective),
+                random.uniform(-h * self.perspective, h * self.perspective),
+            ],
+            [
+                w + random.uniform(-w * self.perspective, w * self.perspective),
+                random.uniform(-h * self.perspective, h * self.perspective),
+            ],
+            [
+                random.uniform(-w * self.perspective, w * self.perspective),
+                h + random.uniform(-h * self.perspective, h * self.perspective),
+            ],
+            [
+                w + random.uniform(-w * self.perspective, w * self.perspective),
+                h + random.uniform(-h * self.perspective, h * self.perspective),
+            ],
+        ]
+
+        # Apply perspective transform to image
+        image = F.perspective(image, startpoints, endpoints)
+
+        # TODO: Implement box perspective transform (complex transformation)
+        # For now, we'll just return the transformed image with original boxes
+        return image, target
+
+    def _flip_horizontal(self, image, target):
+        # Flip image
+        image = F.hflip(image)
+
+        # Flip boxes
+        boxes = target["boxes"]
+        if len(boxes) > 0:
+            w = image.size[0]
+            boxes[:, [0, 2]] = w - boxes[:, [2, 0]]
+            target["boxes"] = boxes
+
+        return image, target
+
+    def _flip_vertical(self, image, target):
+        # Flip image
+        image = F.vflip(image)
+
+        # Flip boxes
+        boxes = target["boxes"]
+        if len(boxes) > 0:
+            h = image.size[1]
+            boxes[:, [1, 3]] = h - boxes[:, [3, 1]]
+            target["boxes"] = boxes
+
+        return image, target
+
+
 # Define the training, validation, and test datasets
-train_dataset = YoloDetectionDataset(
+full_train_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/train",
     label_dir="wm_barriers_data/labels/train",
-    transform=transforms.ToTensor(),
+    transform=T.Compose(
+        [
+            YOLOAugmentation(
+                hsv_h=0.015,
+                hsv_s=0.7,
+                hsv_v=0.4,
+                degrees=10.0,
+                translate=0.1,
+                scale=0.5,
+                shear=0.0,
+                perspective=0.0,
+                flipud=0.0,
+                fliplr=0.5,
+                mosaic=0.0,
+                mixup=0.0,
+                cutmix=0.0,
+            )
+        ]
+    ),
 )
-val_dataset = YoloDetectionDataset(
+
+full_val_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/val",
     label_dir="wm_barriers_data/labels/val",
-    transform=transforms.ToTensor(),
+    transform=T.ToTensor(),
 )
-test_dataset = YoloDetectionDataset(
-    image_dir="wm_barriers_data/images/test",
-    label_dir="wm_barriers_data/labels/test",
-    transform=transforms.ToTensor(),
-)
+
+# Create small subsets for testing
+train_dataset = torch.utils.data.Subset(full_train_dataset, range(5))
+val_dataset = torch.utils.data.Subset(full_val_dataset, range(5))
 
 
 def collate_fn(batch):
@@ -132,13 +402,10 @@ def collate_fn(batch):
 
 # Define the training, validation, and test data loaders
 train_loader = DataLoader(
-    train_dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=collate_fn
+    train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
 )
 val_loader = DataLoader(
-    val_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
-)
-test_loader = DataLoader(
-    test_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
+    val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
 )
 
 # Move the model to the GPU if available
@@ -158,7 +425,7 @@ metric = MeanAveragePrecision()
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 # Define the training loop
-num_epochs = 100
+num_epochs = 2  # Reduced from 100 to 2 for testing
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
