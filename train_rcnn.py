@@ -605,6 +605,7 @@ for epoch in range(num_epochs):
 
         # Get model predictions
         predictions = model(images, targets)
+        print(predictions)
 
         # Compute custom loss
         batch_losses = []
@@ -664,8 +665,8 @@ for epoch in range(num_epochs):
 
             # During validation, we can also get predictions if needed
             # predictions = model(images)  # This would give us the detection results
-            loss_dict = model(images, targets)  # This gives us the losses
-            losses = sum(loss for loss in loss_dict.values())
+            pred = model(images, targets)  # This gives us the losses
+            print(pred)
 
             val_loss += losses.item()
             val_class_loss += loss_dict["loss_classifier"].item()
