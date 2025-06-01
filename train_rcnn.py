@@ -18,6 +18,13 @@ from torchvision.transforms import functional as F
 from torch import nn
 from torch.nn import functional as F_nn
 
+from typing import Tuple, List, Dict, Optional
+import torch
+from torch import Tensor
+from collections import OrderedDict
+from torchvision.models.detection.roi_heads import fastrcnn_loss
+from torchvision.models.detection.rpn import concat_box_prediction_layers
+
 from torchmetrics.detection import MeanAveragePrecision
 
 
@@ -104,56 +111,117 @@ class ClassificationLoss(nn.Module):
         return loss
 
 
-class DetectionLoss(nn.Module):
-    def __init__(self, num_classes, box_beta=1.0, class_weight=None):
-        """
-        Combined loss for object detection.
+def eval_forward(model, images, targets):
+    # type: (List[Tensor], Optional[List[Dict[str, Tensor]]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
+    """
+    Args:
+        images (list[Tensor]): images to be processed
+        targets (list[Dict[str, Tensor]]): ground-truth boxes present in the image (optional)
+    Returns:
+        result (list[BoxList] or dict[Tensor]): the output from the model.
+            It returns list[BoxList] contains additional fields
+            like `scores`, `labels` and `mask` (for Mask R-CNN models).
+    """
+    model.eval()
 
-        Args:
-            num_classes (int): Number of classes (including background)
-            box_beta (float): Beta parameter for smooth L1 loss
-            class_weight (Tensor, optional): Class weights for classification
-        """
-        super().__init__()
-        self.box_loss = BoxLoss(beta=box_beta)
-        self.cls_loss = ClassificationLoss(num_classes, weight=class_weight)
+    original_image_sizes: List[Tuple[int, int]] = []
+    for img in images:
+        val = img.shape[-2:]
+        assert len(val) == 2
+        original_image_sizes.append((val[0], val[1]))
 
-    def forward(self, predictions, targets):
-        """
-        Compute the combined detection loss.
+    images, targets = model.transform(images, targets)
 
-        Args:
-            predictions (Dict): Model predictions containing:
-                - boxes (Tensor): Predicted boxes [N, 4]
-                - labels (Tensor): Predicted class logits [N, num_classes]
-            targets (Dict): Ground truth containing:
-                - boxes (Tensor): Target boxes [N, 4]
-                - labels (Tensor): Target class labels [N]
+    # Check for degenerate boxes
+    # TODO: Move this to a function
+    if targets is not None:
+        for target_idx, target in enumerate(targets):
+            boxes = target["boxes"]
+            degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
+            if degenerate_boxes.any():
+                # print the first degenerate box
+                bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
+                degen_bb: List[float] = boxes[bb_idx].tolist()
+                raise ValueError(
+                    "All bounding boxes should have positive height and width."
+                    f" Found invalid box {degen_bb} for target at index {target_idx}."
+                )
 
-        Returns:
-            Dict: Dictionary containing:
-                - loss_box_reg: Box regression loss
-                - loss_classifier: Classification loss
-                - total_loss: Combined loss
-        """
-        # Extract predictions and targets
-        pred_boxes = predictions["boxes"]
-        pred_logits = predictions["labels"]
-        target_boxes = targets["boxes"]
-        target_labels = targets["labels"]
+    features = model.backbone(images.tensors)
+    if isinstance(features, torch.Tensor):
+        features = OrderedDict([("0", features)])
+    model.rpn.training = True
+    # model.roi_heads.training=True
 
-        # Compute losses
-        box_loss = self.box_loss(pred_boxes, target_boxes)
-        cls_loss = self.cls_loss(pred_logits, target_labels)
+    #####proposals, proposal_losses = model.rpn(images, features, targets)
+    features_rpn = list(features.values())
+    objectness, pred_bbox_deltas = model.rpn.head(features_rpn)
+    anchors = model.rpn.anchor_generator(images, features_rpn)
 
-        # Combine losses (you can adjust the weights)
-        total_loss = box_loss + cls_loss
+    num_images = len(anchors)
+    num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
+    num_anchors_per_level = [
+        s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors
+    ]
+    objectness, pred_bbox_deltas = concat_box_prediction_layers(
+        objectness, pred_bbox_deltas
+    )
+    # apply pred_bbox_deltas to anchors to obtain the decoded proposals
+    # note that we detach the deltas because Faster R-CNN do not backprop through
+    # the proposals
+    proposals = model.rpn.box_coder.decode(pred_bbox_deltas.detach(), anchors)
+    proposals = proposals.view(num_images, -1, 4)
+    proposals, scores = model.rpn.filter_proposals(
+        proposals, objectness, images.image_sizes, num_anchors_per_level
+    )
 
-        return {
-            "loss_box_reg": box_loss,
-            "loss_classifier": cls_loss,
-            "total_loss": total_loss,
-        }
+    proposal_losses = {}
+    assert targets is not None
+    labels, matched_gt_boxes = model.rpn.assign_targets_to_anchors(anchors, targets)
+    regression_targets = model.rpn.box_coder.encode(matched_gt_boxes, anchors)
+    loss_objectness, loss_rpn_box_reg = model.rpn.compute_loss(
+        objectness, pred_bbox_deltas, labels, regression_targets
+    )
+    proposal_losses = {
+        "loss_objectness": loss_objectness,
+        "loss_rpn_box_reg": loss_rpn_box_reg,
+    }
+
+    #####detections, detector_losses = model.roi_heads(features, proposals, images.image_sizes, targets)
+    image_shapes = images.image_sizes
+    proposals, matched_idxs, labels, regression_targets = (
+        model.roi_heads.select_training_samples(proposals, targets)
+    )
+    box_features = model.roi_heads.box_roi_pool(features, proposals, image_shapes)
+    box_features = model.roi_heads.box_head(box_features)
+    class_logits, box_regression = model.roi_heads.box_predictor(box_features)
+
+    result: List[Dict[str, torch.Tensor]] = []
+    detector_losses = {}
+    loss_classifier, loss_box_reg = fastrcnn_loss(
+        class_logits, box_regression, labels, regression_targets
+    )
+    detector_losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
+    boxes, scores, labels = model.roi_heads.postprocess_detections(
+        class_logits, box_regression, proposals, image_shapes
+    )
+    num_images = len(boxes)
+    for i in range(num_images):
+        result.append(
+            {
+                "boxes": boxes[i],
+                "labels": labels[i],
+                "scores": scores[i],
+            }
+        )
+    detections = result
+    detections = model.transform.postprocess(detections, images.image_sizes, original_image_sizes)  # type: ignore[operator]
+    model.rpn.training = False
+    model.roi_heads.training = False
+    losses = {}
+    losses.update(detector_losses)
+    losses.update(proposal_losses)
+    return losses, detections
 
 
 # Initialize the experiment
@@ -175,7 +243,6 @@ in_features = model.roi_heads.box_predictor.cls_score.in_features
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
 # Initialize the custom loss
-detection_loss = DetectionLoss(num_classes=num_classes)
 
 
 # Define the YoloDetectionDataset class
@@ -242,269 +309,7 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
         target = {"boxes": boxes, "labels": labels}
 
         if self.transform is not None:
-            if isinstance(self.transform, YOLOAugmentation):
-                image, target = self.transform(image, target)
-            else:
-                image = self.transform(image)
-
-        return image, target
-
-
-class YOLOAugmentation:
-    def __init__(
-        self,
-        hsv_h=0.015,
-        hsv_s=0.7,
-        hsv_v=0.4,
-        degrees=0.0,
-        translate=0.1,
-        scale=0.5,
-        shear=0.0,
-        perspective=0.0,
-        flipud=0.0,
-        fliplr=0.5,
-        mosaic=1.0,
-        mixup=0.0,
-        cutmix=0.0,
-    ):
-        self.hsv_h = hsv_h
-        self.hsv_s = hsv_s
-        self.hsv_v = hsv_v
-        self.degrees = degrees
-        self.translate = translate
-        self.scale = scale
-        self.shear = shear
-        self.perspective = perspective
-        self.flipud = flipud
-        self.fliplr = fliplr
-        self.mosaic = mosaic
-        self.mixup = mixup
-        self.cutmix = cutmix
-
-    def __call__(self, image, target):
-        # Convert PIL image to numpy array for OpenCV operations
-        img = np.array(image)
-
-        # HSV augmentation
-        if random.random() < 0.5:
-            r = np.random.uniform(-1, 1, 3) * [self.hsv_h, self.hsv_s, self.hsv_v] + 1
-            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_RGB2HSV))
-            dtype = img.dtype
-            x = np.arange(0, 256, dtype=np.int16)
-            lut_hue = ((x * r[0]) % 180).astype(dtype)
-            lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
-            lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
-            img_hsv = cv2.merge(
-                (cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))
-            )
-            img = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB)
-
-        # Convert back to PIL for torchvision transforms
-        image = Image.fromarray(img)
-
-        # Random rotation
-        if self.degrees > 0:
-            angle = random.uniform(-self.degrees, self.degrees)
-            image, target = self._rotate_image_and_boxes(image, target, angle)
-
-        # Random translation
-        if self.translate > 0:
-            translate_x = random.uniform(-self.translate, self.translate)
-            translate_y = random.uniform(-self.translate, self.translate)
-            image, target = self._translate_image_and_boxes(
-                image, target, translate_x, translate_y
-            )
-
-        # Random scale
-        if self.scale > 0:
-            scale = random.uniform(1 - self.scale, 1 + self.scale)
-            image, target = self._scale_image_and_boxes(image, target, scale)
-
-        # Random shear
-        if self.shear > 0:
-            shear_x = random.uniform(-self.shear, self.shear)
-            shear_y = random.uniform(-self.shear, self.shear)
-            image, target = self._shear_image_and_boxes(image, target, shear_x, shear_y)
-
-        # Random perspective
-        if self.perspective > 0:
-            image, target = self._perspective_transform(image, target)
-
-        # Random flips
-        if random.random() < self.flipud:
-            image, target = self._flip_vertical(image, target)
-        if random.random() < self.fliplr:
-            image, target = self._flip_horizontal(image, target)
-
-        # Convert to tensor
-        image = F.to_tensor(image)
-
-        return image, target
-
-    def _rotate_image_and_boxes(self, image, target, angle):
-        # Get image dimensions
-        w, h = image.size
-        # Rotate image
-        image = F.rotate(image, angle)
-        # Rotate boxes
-        boxes = target["boxes"]
-        if len(boxes) > 0:
-            # Convert boxes to center format
-            cx = (boxes[:, 0] + boxes[:, 2]) / 2
-            cy = (boxes[:, 1] + boxes[:, 3]) / 2
-            width = boxes[:, 2] - boxes[:, 0]
-            height = boxes[:, 3] - boxes[:, 1]
-
-            # Rotate centers
-            angle_rad = angle * np.pi / 180
-            cos_a = np.cos(angle_rad)
-            sin_a = np.sin(angle_rad)
-
-            # Calculate new centers
-            cx_new = cx * cos_a - cy * sin_a + w / 2 * (1 - cos_a) + h / 2 * sin_a
-            cy_new = cx * sin_a + cy * cos_a + h / 2 * (1 - cos_a) - w / 2 * sin_a
-
-            # Convert back to box format and ensure minimum size
-            boxes[:, 0] = torch.clamp(cx_new - width / 2, 0, w - 1)
-            boxes[:, 1] = torch.clamp(cy_new - height / 2, 0, h - 1)
-            boxes[:, 2] = torch.clamp(cx_new + width / 2, 1, w)
-            boxes[:, 3] = torch.clamp(cy_new + height / 2, 1, h)
-
-            # Ensure minimum box size
-            min_size = 1.0
-            width = boxes[:, 2] - boxes[:, 0]
-            height = boxes[:, 3] - boxes[:, 1]
-            mask = (width < min_size) | (height < min_size)
-            if mask.any():
-                # For boxes that are too small, expand them
-                boxes[mask, 0] = torch.clamp(
-                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, w - 1
-                )
-                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, w)
-                boxes[mask, 1] = torch.clamp(
-                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, h - 1
-                )
-                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, h)
-
-            target["boxes"] = boxes
-
-        return image, target
-
-    def _translate_image_and_boxes(self, image, target, translate_x, translate_y):
-        w, h = image.size
-        translate_x = int(w * translate_x)
-        translate_y = int(h * translate_y)
-
-        # Translate image
-        image = F.affine(
-            image, angle=0, translate=(translate_x, translate_y), scale=1.0, shear=0
-        )
-
-        # Translate boxes
-        boxes = target["boxes"]
-        if len(boxes) > 0:
-            boxes[:, 0] = torch.clamp(boxes[:, 0] + translate_x, 0, w - 1)
-            boxes[:, 1] = torch.clamp(boxes[:, 1] + translate_y, 0, h - 1)
-            boxes[:, 2] = torch.clamp(boxes[:, 2] + translate_x, 1, w)
-            boxes[:, 3] = torch.clamp(boxes[:, 3] + translate_y, 1, h)
-
-            # Ensure minimum box size
-            min_size = 1.0
-            width = boxes[:, 2] - boxes[:, 0]
-            height = boxes[:, 3] - boxes[:, 1]
-            mask = (width < min_size) | (height < min_size)
-            if mask.any():
-                # For boxes that are too small, expand them
-                boxes[mask, 0] = torch.clamp(
-                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, w - 1
-                )
-                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, w)
-                boxes[mask, 1] = torch.clamp(
-                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, h - 1
-                )
-                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, h)
-
-            target["boxes"] = boxes
-
-        return image, target
-
-    def _scale_image_and_boxes(self, image, target, scale):
-        w, h = image.size
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-
-        # Scale image
-        image = F.resize(image, (new_h, new_w))
-
-        # Scale boxes
-        boxes = target["boxes"]
-        if len(boxes) > 0:
-            boxes[:, 0] = torch.clamp(boxes[:, 0] * scale, 0, new_w - 1)
-            boxes[:, 1] = torch.clamp(boxes[:, 1] * scale, 0, new_h - 1)
-            boxes[:, 2] = torch.clamp(boxes[:, 2] * scale, 1, new_w)
-            boxes[:, 3] = torch.clamp(boxes[:, 3] * scale, 1, new_h)
-
-            # Ensure minimum box size
-            min_size = 1.0
-            width = boxes[:, 2] - boxes[:, 0]
-            height = boxes[:, 3] - boxes[:, 1]
-            mask = (width < min_size) | (height < min_size)
-            if mask.any():
-                # For boxes that are too small, expand them
-                boxes[mask, 0] = torch.clamp(
-                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, new_w - 1
-                )
-                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, new_w)
-                boxes[mask, 1] = torch.clamp(
-                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, new_h - 1
-                )
-                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, new_h)
-
-            target["boxes"] = boxes
-
-        return image, target
-
-    def _shear_image_and_boxes(self, image, target, shear_x, shear_y):
-        # For now, skip shear augmentation as it's complex to maintain valid boxes
-        return image, target
-
-    def _perspective_transform(self, image, target):
-        # For now, skip perspective transform as it's complex to maintain valid boxes
-        return image, target
-
-    def _flip_horizontal(self, image, target):
-        # Flip image
-        image = F.hflip(image)
-
-        # Flip boxes
-        boxes = target["boxes"]
-        if len(boxes) > 0:
-            w = image.size[0]
-            boxes[:, [0, 2]] = w - boxes[:, [2, 0]]
-            # Ensure x1 < x2
-            boxes[:, 0], boxes[:, 2] = (
-                torch.min(boxes[:, [0, 2]], dim=1)[0],
-                torch.max(boxes[:, [0, 2]], dim=1)[0],
-            )
-            target["boxes"] = boxes
-
-        return image, target
-
-    def _flip_vertical(self, image, target):
-        # Flip image
-        image = F.vflip(image)
-
-        # Flip boxes
-        boxes = target["boxes"]
-        if len(boxes) > 0:
-            h = image.size[1]
-            boxes[:, [1, 3]] = h - boxes[:, [3, 1]]
-            # Ensure y1 < y2
-            boxes[:, 1], boxes[:, 3] = (
-                torch.min(boxes[:, [1, 3]], dim=1)[0],
-                torch.max(boxes[:, [1, 3]], dim=1)[0],
-            )
-            target["boxes"] = boxes
+            image = self.transform(image)
 
         return image, target
 
@@ -606,26 +411,27 @@ for epoch in range(num_epochs):
         # Get model predictions (returns a dict of losses)
         loss_dict = model(images, targets)
         losses = sum(loss for loss in loss_dict.values())
-        
+
         optimizer.zero_grad()
         losses.backward()
         optimizer.step()
 
         # Accumulate losses
         train_loss += losses.item()
-        train_class_loss += loss_dict['loss_classifier'].item()
-        train_box_loss += loss_dict['loss_box_reg'].item()
+        train_class_loss += loss_dict["loss_classifier"].item()
+        train_box_loss += loss_dict["loss_box_reg"].item()
 
         # Update progress bar
-        train_pbar.set_postfix({
-            "loss": f"{losses.item():.4f}",
-            "cls": f"{loss_dict['loss_classifier'].item():.4f}",
-            "box": f"{loss_dict['loss_box_reg'].item():.4f}"
-        })
+        train_pbar.set_postfix(
+            {
+                "loss": f"{losses.item():.4f}",
+                "cls": f"{loss_dict['loss_classifier'].item():.4f}",
+                "box": f"{loss_dict['loss_box_reg'].item():.4f}",
+            }
+        )
 
     lr_scheduler.step()
 
-    model.eval()
     val_loss = 0.0
     val_class_loss = 0.0
     val_box_loss = 0.0
@@ -640,7 +446,7 @@ for epoch in range(num_epochs):
 
             # During validation, we can also get predictions if needed
             # predictions = model(images)  # This would give us the detection results
-            loss_dict = model(images, targets)  # This gives us the losses
+            loss_dict, detections = eval_forward(model, images, targets)
             print(loss_dict)
             losses = sum(loss for loss in loss_dict.values())
 
