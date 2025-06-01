@@ -313,12 +313,6 @@ val_dataset = YoloDetectionDataset(
     transform=val_transform,
 )
 
-
-# Sample 10 images from the train dataset
-train_dataset = torch.utils.data.Subset(train_dataset, range(10))
-val_dataset = torch.utils.data.Subset(val_dataset, range(10))
-
-
 def collate_fn(batch):
     images = []
     targets = []
@@ -353,7 +347,7 @@ metric = MeanAveragePrecision()
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 # Define the training loop
-num_epochs = 6  # Reduced from 100 to 2 for testing
+num_epochs = 50  # Reduced from 100 to 2 for testing
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
