@@ -353,7 +353,7 @@ metric = MeanAveragePrecision()
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 # Define the training loop
-num_epochs = 5  # Reduced from 100 to 2 for testing
+num_epochs = 6  # Reduced from 100 to 2 for testing
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
@@ -441,24 +441,6 @@ for epoch in range(num_epochs):
                 val_loss += losses.item()
                 val_class_loss += loss_dict["loss_classifier"].item()
                 val_box_loss += loss_dict["loss_box_reg"].item()
-
-                # Debug information
-                for i, (det, tgt) in enumerate(zip(detections, targets)):
-                    print(f"\nImage {i}:")
-                    print(
-                        f"Predictions - Boxes: {len(det['boxes'])}, Labels: {len(det['labels'])}, Scores: {len(det['scores'])}"
-                    )
-                    print(
-                        f"Ground Truth - Boxes: {len(tgt['boxes'])}, Labels: {len(tgt['labels'])}"
-                    )
-                    if len(det["boxes"]) > 0:
-                        print(
-                            f"Sample prediction - Box: {det['boxes'][0]}, Label: {det['labels'][0]}, Score: {det['scores'][0]}"
-                        )
-                    if len(tgt["boxes"]) > 0:
-                        print(
-                            f"Sample ground truth - Box: {tgt['boxes'][0]}, Label: {tgt['labels'][0]}"
-                        )
 
                 # Update mAP metric
                 metric.update(detections, targets)
