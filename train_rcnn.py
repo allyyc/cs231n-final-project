@@ -641,6 +641,7 @@ for epoch in range(num_epochs):
             # During validation, we can also get predictions if needed
             # predictions = model(images)  # This would give us the detection results
             loss_dict = model(images, targets)  # This gives us the losses
+            print(loss_dict)
             losses = sum(loss for loss in loss_dict.values())
 
             val_loss += losses.item()
