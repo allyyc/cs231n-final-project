@@ -395,7 +395,7 @@ metric = MeanAveragePrecision()
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 # Define the training loop
-num_epochs = 10  # Reduced from 100 to 2 for testing
+num_epochs = 2  # Reduced from 100 to 2 for testing
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
@@ -432,76 +432,83 @@ for epoch in range(num_epochs):
 
     lr_scheduler.step()
 
-    # Validation phase
-    model.eval()
-    val_loss = 0.0
-    val_class_loss = 0.0
-    val_box_loss = 0.0
+    if epoch % 1 == 0:
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        val_class_loss = 0.0
+        val_box_loss = 0.0
 
-    # Initialize metric with specific settings
-    metric = MeanAveragePrecision(
-        box_format="xyxy",  # Our boxes are in [x1, y1, x2, y2] format
-        iou_thresholds=[0.5],  # We only care about IoU@0.5
-        class_metrics=True,  # Get per-class metrics
-    )
+        # Initialize metric with specific settings
+        metric = MeanAveragePrecision(
+            box_format="xyxy",  # Our boxes are in [x1, y1, x2, y2] format
+            iou_thresholds=[0.5],  # We only care about IoU@0.5
+            class_metrics=True,  # Get per-class metrics
+        )
 
-    # Create progress bar for validation
-    val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
-    with torch.no_grad():
-        for images, targets in val_pbar:
-            images = [img.to(device) for img in images]
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # Create progress bar for validation
+        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+        with torch.no_grad():
+            for images, targets in val_pbar:
+                images = [img.to(device) for img in images]
+                targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            # Get predictions and losses
-            loss_dict, detections = eval_forward(model, images, targets)
-            losses = sum(loss for loss in loss_dict.values())
+                # Get predictions and losses
+                loss_dict, detections = eval_forward(model, images, targets)
+                losses = sum(loss for loss in loss_dict.values())
 
-            # Update validation losses
-            val_loss += losses.item()
-            val_class_loss += loss_dict["loss_classifier"].item()
-            val_box_loss += loss_dict["loss_box_reg"].item()
+                # Update validation losses
+                val_loss += losses.item()
+                val_class_loss += loss_dict["loss_classifier"].item()
+                val_box_loss += loss_dict["loss_box_reg"].item()
 
-            # Debug information
-            for i, (det, tgt) in enumerate(zip(detections, targets)):
-                print(f"\nImage {i}:")
-                print(
-                    f"Predictions - Boxes: {len(det['boxes'])}, Labels: {len(det['labels'])}, Scores: {len(det['scores'])}"
-                )
-                print(
-                    f"Ground Truth - Boxes: {len(tgt['boxes'])}, Labels: {len(tgt['labels'])}"
-                )
-                if len(det["boxes"]) > 0:
+                # Debug information
+                for i, (det, tgt) in enumerate(zip(detections, targets)):
+                    print(f"\nImage {i}:")
                     print(
-                        f"Sample prediction - Box: {det['boxes'][0]}, Label: {det['labels'][0]}, Score: {det['scores'][0]}"
+                        f"Predictions - Boxes: {len(det['boxes'])}, Labels: {len(det['labels'])}, Scores: {len(det['scores'])}"
                     )
-                if len(tgt["boxes"]) > 0:
                     print(
-                        f"Sample ground truth - Box: {tgt['boxes'][0]}, Label: {tgt['labels'][0]}"
+                        f"Ground Truth - Boxes: {len(tgt['boxes'])}, Labels: {len(tgt['labels'])}"
                     )
+                    if len(det["boxes"]) > 0:
+                        print(
+                            f"Sample prediction - Box: {det['boxes'][0]}, Label: {det['labels'][0]}, Score: {det['scores'][0]}"
+                        )
+                    if len(tgt["boxes"]) > 0:
+                        print(
+                            f"Sample ground truth - Box: {tgt['boxes'][0]}, Label: {tgt['labels'][0]}"
+                        )
 
-            # Update mAP metric
-            metric.update(detections, targets)
+                # Update mAP metric
+                metric.update(detections, targets)
 
-            # Update progress bar
-            val_pbar.set_postfix(
-                {
-                    "loss": f"{losses.item():.4f}",
-                    "cls": f'{loss_dict["loss_classifier"].item():.4f}',
-                    "box": f'{loss_dict["loss_box_reg"].item():.4f}',
-                }
-            )
+                # Update progress bar
+                val_pbar.set_postfix(
+                    {
+                        "loss": f"{losses.item():.4f}",
+                        "cls": f'{loss_dict["loss_classifier"].item():.4f}',
+                        "box": f'{loss_dict["loss_box_reg"].item():.4f}',
+                    }
+                )
 
-    # Calculate mAP@50 and other metrics
-    map_results = metric.compute()
-    map_50 = map_results["map_50"].item()
+        # Calculate mAP@50 and other metrics
+        map_results = metric.compute()
+        map_50 = map_results["map_50"].item()
 
-    # Print detailed metrics
-    print("\nDetailed Metrics:")
-    print(f"mAP@50: {map_50:.4f}")
-    if "map_per_class" in map_results:
-        print("\nPer-class mAP@50:")
-        for class_id, class_map in enumerate(map_results["map_per_class"]):
-            print(f"Class {class_id}: {class_map.item():.4f}")
+        # Print detailed metrics
+        print("\nDetailed Metrics:")
+        print(f"mAP@50: {map_50:.4f}")
+        if "map_per_class" in map_results:
+            print("\nPer-class mAP@50:")
+            for class_id, class_map in enumerate(map_results["map_per_class"]):
+                print(f"Class {class_id}: {class_map.item():.4f}")
+        
+        print(
+            f"Val   - Avg Loss: {val_loss / len(val_loader):.4f}, "
+            f"Class Loss: {val_class_loss / len(val_loader):.4f}, "
+            f"Box Loss: {val_box_loss / len(val_loader):.4f}"
+        )
 
     # Print epoch summary
     print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
@@ -510,12 +517,7 @@ for epoch in range(num_epochs):
         f"Class Loss: {train_class_loss / len(train_loader):.4f}, "
         f"Box Loss: {train_box_loss / len(train_loader):.4f}"
     )
-    print(
-        f"Val   - Avg Loss: {val_loss / len(val_loader):.4f}, "
-        f"Class Loss: {val_class_loss / len(val_loader):.4f}, "
-        f"Box Loss: {val_box_loss / len(val_loader):.4f}"
-    )
-    print(f"mAP@50: {map_50:.4f}\n")
+
 
     # Log metrics
     experiment.log_metric("mAP@50", map_50, step=epoch)
