@@ -344,22 +344,17 @@ train_transform = T.Compose(
 val_transform = T.ToTensor()
 
 # Define the training, validation, and test datasets
-full_train_dataset = YoloDetectionDataset(
+train_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/train",
     label_dir="wm_barriers_data/labels/train",
     transform=train_transform,
 )
 
-full_val_dataset = YoloDetectionDataset(
+val_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/val",
     label_dir="wm_barriers_data/labels/val",
     transform=val_transform,
 )
-
-# Create small subsets for testing
-train_dataset = torch.utils.data.Subset(full_train_dataset, range(10))
-val_dataset = torch.utils.data.Subset(full_val_dataset, range(10))
-
 
 def collate_fn(batch):
     images = []
@@ -395,7 +390,7 @@ metric = MeanAveragePrecision()
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
 # Define the training loop
-num_epochs = 2  # Reduced from 100 to 2 for testing
+num_epochs = 20  # Reduced from 100 to 2 for testing
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
@@ -432,7 +427,7 @@ for epoch in range(num_epochs):
 
     lr_scheduler.step()
 
-    if epoch % 1 == 0:
+    if epoch % 5 == 0:
         # Validation phase
         model.eval()
         val_loss = 0.0
