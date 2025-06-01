@@ -437,7 +437,13 @@ for epoch in range(num_epochs):
     val_loss = 0.0
     val_class_loss = 0.0
     val_box_loss = 0.0
-    metric = metric.reset()  # Reset metric for this epoch
+
+    # Initialize metric with specific settings
+    metric = MeanAveragePrecision(
+        box_format="xyxy",  # Our boxes are in [x1, y1, x2, y2] format
+        iou_thresholds=[0.5],  # We only care about IoU@0.5
+        class_metrics=True,  # Get per-class metrics
+    )
 
     # Create progress bar for validation
     val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
@@ -455,8 +461,25 @@ for epoch in range(num_epochs):
             val_class_loss += loss_dict["loss_classifier"].item()
             val_box_loss += loss_dict["loss_box_reg"].item()
 
+            # Debug information
+            for i, (det, tgt) in enumerate(zip(detections, targets)):
+                print(f"\nImage {i}:")
+                print(
+                    f"Predictions - Boxes: {len(det['boxes'])}, Labels: {len(det['labels'])}, Scores: {len(det['scores'])}"
+                )
+                print(
+                    f"Ground Truth - Boxes: {len(tgt['boxes'])}, Labels: {len(tgt['labels'])}"
+                )
+                if len(det["boxes"]) > 0:
+                    print(
+                        f"Sample prediction - Box: {det['boxes'][0]}, Label: {det['labels'][0]}, Score: {det['scores'][0]}"
+                    )
+                if len(tgt["boxes"]) > 0:
+                    print(
+                        f"Sample ground truth - Box: {tgt['boxes'][0]}, Label: {tgt['labels'][0]}"
+                    )
+
             # Update mAP metric
-            # Convert targets to the format expected by the metric
             metric.update(detections, targets)
 
             # Update progress bar
@@ -468,9 +491,17 @@ for epoch in range(num_epochs):
                 }
             )
 
-    # Calculate mAP@50
+    # Calculate mAP@50 and other metrics
     map_results = metric.compute()
-    map_50 = map_results["map_50"].item()  # Get mAP@50 specifically
+    map_50 = map_results["map_50"].item()
+
+    # Print detailed metrics
+    print("\nDetailed Metrics:")
+    print(f"mAP@50: {map_50:.4f}")
+    if "map_per_class" in map_results:
+        print("\nPer-class mAP@50:")
+        for class_id, class_map in enumerate(map_results["map_per_class"]):
+            print(f"Class {class_id}: {class_map.item():.4f}")
 
     # Print epoch summary
     print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
