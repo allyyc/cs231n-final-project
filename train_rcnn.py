@@ -276,6 +276,7 @@ val_dataset = YoloDetectionDataset(
 train_dataset = torch.utils.data.Subset(train_dataset, range(10))
 val_dataset = torch.utils.data.Subset(val_dataset, range(10))
 
+
 def collate_fn(batch):
     images = []
     targets = []
@@ -436,22 +437,34 @@ for epoch in range(num_epochs):
         map_50 = map_results["map_50"].item()
         map_50_95 = map_results["map"].item()  # This is mAP@50:95
 
-        print(map_results.keys())
+        # Calculate precision at different IoU thresholds
+        precision_50 = calculate_precision(detections, targets, iou_threshold=0.5)
+        precision_75 = calculate_precision(detections, targets, iou_threshold=0.75)
 
-        # Get precision and recall at different detection thresholds
-        precision = (
-            map_results["precision"].mean().item()
-        )  # Average precision across all thresholds
-        recall = (
-            map_results["recall"].mean().item()
-        )  # Average recall across all thresholds
+        # Get recall metrics using available keys
+        recall_1 = map_results["mar_1"].item()  # Recall at 1 detection
+        recall_10 = map_results["mar_10"].item()  # Recall at 10 detections
+        recall_100 = map_results["mar_100"].item()  # Recall at 100 detections
 
         # Print detailed metrics
         print("\nDetailed Metrics:")
         print(f"mAP@50: {map_50:.4f}")
         print(f"mAP@50:95: {map_50_95:.4f}")
-        print(f"Precision: {precision:.4f}")
-        print(f"Recall: {recall:.4f}")
+        print(f"mAP@75: {map_results['map_75'].item():.4f}")
+        print("\nPrecision at different IoU thresholds:")
+        print(f"Precision@IoU=0.5: {precision_50:.4f}")
+        print(f"Precision@IoU=0.75: {precision_75:.4f}")
+        print("\nRecall at different detection thresholds:")
+        print(f"Recall@1: {recall_1:.4f}")
+        print(f"Recall@10: {recall_10:.4f}")
+        print(f"Recall@100: {recall_100:.4f}")
+
+        # Print size-based metrics
+        print("\nSize-based Metrics:")
+        print(f"mAP (small objects): {map_results['map_small'].item():.4f}")
+        print(f"mAP (medium objects): {map_results['map_medium'].item():.4f}")
+        print(f"mAP (large objects): {map_results['map_large'].item():.4f}")
+
         if "map_per_class" in map_results:
             print("\nPer-class mAP@50:")
             for class_id, class_map in enumerate(map_results["map_per_class"]):
@@ -478,8 +491,15 @@ for epoch in range(num_epochs):
     # Log metrics
     experiment.log_metric("mAP@50", map_50, step=epoch)
     experiment.log_metric("mAP@50:95", map_50_95, step=epoch)
-    experiment.log_metric("precision", precision, step=epoch)
-    experiment.log_metric("recall", recall, step=epoch)
+    experiment.log_metric("mAP@75", map_results["map_75"].item(), step=epoch)
+    experiment.log_metric("precision@50", precision_50, step=epoch)
+    experiment.log_metric("precision@75", precision_75, step=epoch)
+    experiment.log_metric("recall@1", recall_1, step=epoch)
+    experiment.log_metric("recall@10", recall_10, step=epoch)
+    experiment.log_metric("recall@100", recall_100, step=epoch)
+    experiment.log_metric("map_small", map_results["map_small"].item(), step=epoch)
+    experiment.log_metric("map_medium", map_results["map_medium"].item(), step=epoch)
+    experiment.log_metric("map_large", map_results["map_large"].item(), step=epoch)
     experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
     experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
     experiment.log_metric(
@@ -529,3 +549,46 @@ def predict(model, image):
     # Remove batch dimension and move to CPU
     predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions][0]
     return predictions
+
+
+def calculate_precision(detections, targets, iou_threshold=0.5):
+    """
+    Calculate precision for a batch of detections.
+
+    Args:
+        detections: List of dicts with 'boxes', 'labels', 'scores' for each image
+        targets: List of dicts with 'boxes', 'labels' for each image
+        iou_threshold: IoU threshold for considering a detection as correct
+
+    Returns:
+        precision: Average precision across all images
+    """
+    total_precision = 0.0
+    num_images = len(detections)
+
+    for det, tgt in zip(detections, targets):
+        if len(det["boxes"]) == 0:
+            continue
+
+        # Get predicted boxes and ground truth boxes
+        pred_boxes = det["boxes"]
+        gt_boxes = tgt["boxes"]
+
+        if len(gt_boxes) == 0:
+            continue
+
+        # Calculate IoU between all predicted and ground truth boxes
+        ious = torchvision.ops.box_iou(pred_boxes, gt_boxes)
+
+        # For each predicted box, find the maximum IoU with any ground truth box
+        max_ious, _ = ious.max(dim=1)
+
+        # Count true positives (predictions with IoU > threshold)
+        true_positives = (max_ious > iou_threshold).sum().item()
+
+        # Calculate precision for this image
+        precision = true_positives / len(pred_boxes) if len(pred_boxes) > 0 else 0.0
+        total_precision += precision
+
+    # Average precision across all images
+    return total_precision / num_images if num_images > 0 else 0.0
