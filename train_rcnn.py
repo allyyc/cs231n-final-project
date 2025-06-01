@@ -501,9 +501,6 @@ for epoch in range(num_epochs):
     )
     experiment.log_metric("val_box_loss", val_box_loss / len(val_loader), step=epoch)
 
-    # Log the model
-    experiment.log_model("faster_rcnn_resnet50_fpn", model)
-
 # Save the model
 torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn.pth")
 
