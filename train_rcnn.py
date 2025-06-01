@@ -15,12 +15,149 @@ import random
 import numpy as np
 import cv2
 from torchvision.transforms import functional as F
+from torch import nn
+from torch.nn import functional as F_nn
 
 from torchmetrics.detection import MeanAveragePrecision
 
+
+class BoxLoss(nn.Module):
+    def __init__(self, beta=1.0):
+        """
+        Smooth L1 Loss (Huber Loss) for box regression.
+
+        Args:
+            beta (float): The threshold where the loss changes from L1 to L2.
+                        Default is 1.0 as in the original Fast R-CNN paper.
+        """
+        super().__init__()
+        self.beta = beta
+
+    def forward(self, pred_boxes, target_boxes):
+        """
+        Compute the smooth L1 loss between predicted and target boxes.
+
+        Args:
+            pred_boxes (Tensor): Predicted boxes of shape [N, 4]
+            target_boxes (Tensor): Target boxes of shape [N, 4]
+
+        Returns:
+            Tensor: The smooth L1 loss
+        """
+        # Ensure boxes are in the same format
+        assert pred_boxes.shape == target_boxes.shape, "Box shapes must match"
+
+        # Compute absolute difference
+        abs_diff = torch.abs(pred_boxes - target_boxes)
+
+        # Compute smooth L1 loss
+        smooth_l1 = torch.where(
+            abs_diff < self.beta,
+            0.5 * abs_diff**2 / self.beta,
+            abs_diff - 0.5 * self.beta,
+        )
+
+        return smooth_l1.mean()
+
+
+class ClassificationLoss(nn.Module):
+    def __init__(self, num_classes, weight=None):
+        """
+        Cross Entropy Loss for classification with optional class weights.
+
+        Args:
+            num_classes (int): Number of classes (including background)
+            weight (Tensor, optional): Class weights to handle class imbalance
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.weight = weight
+        self.ce_loss = nn.CrossEntropyLoss(weight=weight, reduction="none")
+
+    def forward(self, pred_logits, target_labels):
+        """
+        Compute the classification loss.
+
+        Args:
+            pred_logits (Tensor): Predicted class logits of shape [N, num_classes]
+            target_labels (Tensor): Target class labels of shape [N]
+
+        Returns:
+            Tensor: The classification loss
+        """
+        # Ensure inputs are in the correct format
+        assert (
+            pred_logits.shape[1] == self.num_classes
+        ), f"Expected {self.num_classes} classes"
+        assert pred_logits.shape[0] == target_labels.shape[0], "Batch sizes must match"
+
+        # Compute cross entropy loss
+        loss = self.ce_loss(pred_logits, target_labels)
+
+        # Average over valid samples (ignore background class if needed)
+        valid_mask = target_labels >= 0  # -1 is often used as ignore label
+        if valid_mask.any():
+            loss = loss[valid_mask].mean()
+        else:
+            loss = loss.mean()
+
+        return loss
+
+
+class DetectionLoss(nn.Module):
+    def __init__(self, num_classes, box_beta=1.0, class_weight=None):
+        """
+        Combined loss for object detection.
+
+        Args:
+            num_classes (int): Number of classes (including background)
+            box_beta (float): Beta parameter for smooth L1 loss
+            class_weight (Tensor, optional): Class weights for classification
+        """
+        super().__init__()
+        self.box_loss = BoxLoss(beta=box_beta)
+        self.cls_loss = ClassificationLoss(num_classes, weight=class_weight)
+
+    def forward(self, predictions, targets):
+        """
+        Compute the combined detection loss.
+
+        Args:
+            predictions (Dict): Model predictions containing:
+                - boxes (Tensor): Predicted boxes [N, 4]
+                - labels (Tensor): Predicted class logits [N, num_classes]
+            targets (Dict): Ground truth containing:
+                - boxes (Tensor): Target boxes [N, 4]
+                - labels (Tensor): Target class labels [N]
+
+        Returns:
+            Dict: Dictionary containing:
+                - loss_box_reg: Box regression loss
+                - loss_classifier: Classification loss
+                - total_loss: Combined loss
+        """
+        # Extract predictions and targets
+        pred_boxes = predictions["boxes"]
+        pred_logits = predictions["labels"]
+        target_boxes = targets["boxes"]
+        target_labels = targets["labels"]
+
+        # Compute losses
+        box_loss = self.box_loss(pred_boxes, target_boxes)
+        cls_loss = self.cls_loss(pred_logits, target_labels)
+
+        # Combine losses (you can adjust the weights)
+        total_loss = box_loss + cls_loss
+
+        return {
+            "loss_box_reg": box_loss,
+            "loss_classifier": cls_loss,
+            "total_loss": total_loss,
+        }
+
+
 # Initialize the experiment
 experiment = Experiment(api_key=os.getenv("COMET_API_KEY"))
-
 
 # Load the pre-trained Faster R-CNN model with a ResNet-50 backbone
 model = fasterrcnn_resnet50_fpn(pretrained=True)
@@ -36,6 +173,9 @@ in_features = model.roi_heads.box_predictor.cls_score.in_features
 
 # Replace the head of the model with a new one (for the number of classes in your dataset)
 model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+# Initialize the custom loss
+detection_loss = DetectionLoss(num_classes=num_classes)
 
 
 # Define the YoloDetectionDataset class
@@ -463,23 +603,42 @@ for epoch in range(num_epochs):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
+        # Get model predictions
+        predictions = model(images)
+
+        # Compute custom loss
+        batch_losses = []
+        for pred, target in zip(predictions, targets):
+            loss_dict = detection_loss(pred, target)
+            batch_losses.append(loss_dict)
+
+        # Average losses across batch
+        losses = {
+            "loss_box_reg": torch.stack(
+                [l["loss_box_reg"] for l in batch_losses]
+            ).mean(),
+            "loss_classifier": torch.stack(
+                [l["loss_classifier"] for l in batch_losses]
+            ).mean(),
+            "total_loss": torch.stack([l["total_loss"] for l in batch_losses]).mean(),
+        }
+
+        total_loss = losses["total_loss"]
 
         optimizer.zero_grad()
-        losses.backward()
+        total_loss.backward()
         optimizer.step()
 
-        train_loss += losses.item()
-        train_class_loss += loss_dict["loss_classifier"].item()
-        train_box_loss += loss_dict["loss_box_reg"].item()
+        train_loss += total_loss.item()
+        train_class_loss += losses["loss_classifier"].item()
+        train_box_loss += losses["loss_box_reg"].item()
 
         # Update progress bar with current loss
         train_pbar.set_postfix(
             {
-                "loss": f"{losses.item():.4f}",
-                "class_loss": f'{loss_dict["loss_classifier"].item():.4f}',
-                "box_loss": f'{loss_dict["loss_box_reg"].item():.4f}',
+                "loss": f"{total_loss.item():.4f}",
+                "class_loss": f'{losses["loss_classifier"].item():.4f}',
+                "box_loss": f'{losses["loss_box_reg"].item():.4f}',
             }
         )
 
@@ -499,11 +658,13 @@ for epoch in range(num_epochs):
     val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
     with torch.no_grad():
         for images, targets in val_pbar:
-            # Calculate loss and mAP
+            # During validation, we still want to compute losses
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            loss_dict = model(images, targets)
+            # During validation, we can also get predictions if needed
+            # predictions = model(images)  # This would give us the detection results
+            loss_dict = model(images, targets)  # This gives us the losses
             losses = sum(loss for loss in loss_dict.values())
 
             val_loss += losses.item()
@@ -557,3 +718,31 @@ for epoch in range(num_epochs):
 
 # Save the model
 torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn.pth")
+
+
+# Add inference function
+def predict(model, image):
+    """
+    Run inference on a single image.
+
+    Args:
+        model: The trained Faster R-CNN model
+        image: A PIL Image or tensor of shape [C, H, W]
+
+    Returns:
+        predictions: A dictionary containing:
+            - boxes (FloatTensor[N, 4]): the predicted boxes in [x1, y1, x2, y2] format
+            - labels (Int64Tensor[N]): the predicted labels
+            - scores (Tensor[N]): the scores for each detection
+    """
+    model.eval()
+    if isinstance(image, Image.Image):
+        image = T.ToTensor()(image)
+    image = image.unsqueeze(0).to(device)  # Add batch dimension
+
+    with torch.no_grad():
+        predictions = model(image)
+
+    # Remove batch dimension and move to CPU
+    predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions][0]
+    return predictions
