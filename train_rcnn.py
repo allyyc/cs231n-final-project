@@ -600,55 +600,30 @@ for epoch in range(num_epochs):
     # Create progress bar for training
     train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
     for images, targets in train_pbar:
-        images = list(image.to(device) for image in images)
+        images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        # Get model predictions
-        predictions = model(images, targets)
-        print(predictions)
-
-        # Compute custom loss
-        batch_losses = []
-        for pred, target in zip(predictions, targets):
-            loss_dict = detection_loss(pred, target)
-            batch_losses.append(loss_dict)
-
-        # Average losses across batch
-        losses = {
-            "loss_box_reg": torch.stack(
-                [l["loss_box_reg"] for l in batch_losses]
-            ).mean(),
-            "loss_classifier": torch.stack(
-                [l["loss_classifier"] for l in batch_losses]
-            ).mean(),
-            "total_loss": torch.stack([l["total_loss"] for l in batch_losses]).mean(),
-        }
-
-        total_loss = losses["total_loss"]
-
+        # Get model predictions (returns a dict of losses)
+        loss_dict = model(images, targets)
+        losses = sum(loss for loss in loss_dict.values())
+        
         optimizer.zero_grad()
-        total_loss.backward()
+        losses.backward()
         optimizer.step()
 
-        train_loss += total_loss.item()
-        train_class_loss += losses["loss_classifier"].item()
-        train_box_loss += losses["loss_box_reg"].item()
+        # Accumulate losses
+        train_loss += losses.item()
+        train_class_loss += loss_dict['loss_classifier'].item()
+        train_box_loss += loss_dict['loss_box_reg'].item()
 
-        # Update progress bar with current loss
-        train_pbar.set_postfix(
-            {
-                "loss": f"{total_loss.item():.4f}",
-                "class_loss": f'{losses["loss_classifier"].item():.4f}',
-                "box_loss": f'{losses["loss_box_reg"].item():.4f}',
-            }
-        )
+        # Update progress bar
+        train_pbar.set_postfix({
+            "loss": f"{losses.item():.4f}",
+            "cls": f"{loss_dict['loss_classifier'].item():.4f}",
+            "box": f"{loss_dict['loss_box_reg'].item():.4f}"
+        })
 
     lr_scheduler.step()
-
-    # Average the losses
-    avg_train_loss = train_loss / len(train_loader)
-    avg_train_class_loss = train_class_loss / len(train_loader)
-    avg_train_box_loss = train_box_loss / len(train_loader)
 
     model.eval()
     val_loss = 0.0
@@ -665,8 +640,8 @@ for epoch in range(num_epochs):
 
             # During validation, we can also get predictions if needed
             # predictions = model(images)  # This would give us the detection results
-            pred = model(images, targets)  # This gives us the losses
-            print(pred)
+            loss_dict = model(images, targets)  # This gives us the losses
+            losses = sum(loss for loss in loss_dict.values())
 
             val_loss += losses.item()
             val_class_loss += loss_dict["loss_classifier"].item()
@@ -680,7 +655,6 @@ for epoch in range(num_epochs):
                     "box_loss": f'{loss_dict["loss_box_reg"].item():.4f}',
                 }
             )
-
     # Calculate mAP
     results = metric.compute()
     map_50 = results["map_50"]
@@ -693,7 +667,7 @@ for epoch in range(num_epochs):
     # Print epoch summary
     print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
     print(
-        f"Train - Loss: {avg_train_loss:.4f}, Class Loss: {avg_train_class_loss:.4f}, Box Loss: {avg_train_box_loss:.4f}"
+        f"Train - Avg Loss: {train_loss / len(train_loader):.4f}, Class Loss: {train_class_loss / len(train_loader):.4f}, Box Loss: {train_box_loss / len(train_loader):.4f}"
     )
     print(
         f"Val   - Loss: {avg_val_loss:.4f}, Class Loss: {avg_val_class_loss:.4f}, Box Loss: {avg_val_box_loss:.4f}"
