@@ -27,6 +27,48 @@ from torchvision.models.detection.rpn import concat_box_prediction_layers
 
 from torchmetrics.detection import MeanAveragePrecision
 
+def calculate_precision(detections, targets, iou_threshold=0.5):
+    """
+    Calculate precision for a batch of detections.
+
+    Args:
+        detections: List of dicts with 'boxes', 'labels', 'scores' for each image
+        targets: List of dicts with 'boxes', 'labels' for each image
+        iou_threshold: IoU threshold for considering a detection as correct
+
+    Returns:
+        precision: Average precision across all images
+    """
+    total_precision = 0.0
+    num_images = len(detections)
+
+    for det, tgt in zip(detections, targets):
+        if len(det["boxes"]) == 0:
+            continue
+
+        # Get predicted boxes and ground truth boxes
+        pred_boxes = det["boxes"]
+        gt_boxes = tgt["boxes"]
+
+        if len(gt_boxes) == 0:
+            continue
+
+        # Calculate IoU between all predicted and ground truth boxes
+        ious = torchvision.ops.box_iou(pred_boxes, gt_boxes)
+
+        # For each predicted box, find the maximum IoU with any ground truth box
+        max_ious, _ = ious.max(dim=1)
+
+        # Count true positives (predictions with IoU > threshold)
+        true_positives = (max_ious > iou_threshold).sum().item()
+
+        # Calculate precision for this image
+        precision = true_positives / len(pred_boxes) if len(pred_boxes) > 0 else 0.0
+        total_precision += precision
+
+    # Average precision across all images
+    return total_precision / num_images if num_images > 0 else 0.0
+
 
 def eval_forward(model, images, targets):
     # type: (List[Tensor], Optional[List[Dict[str, Tensor]]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
@@ -550,45 +592,3 @@ def predict(model, image):
     predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions][0]
     return predictions
 
-
-def calculate_precision(detections, targets, iou_threshold=0.5):
-    """
-    Calculate precision for a batch of detections.
-
-    Args:
-        detections: List of dicts with 'boxes', 'labels', 'scores' for each image
-        targets: List of dicts with 'boxes', 'labels' for each image
-        iou_threshold: IoU threshold for considering a detection as correct
-
-    Returns:
-        precision: Average precision across all images
-    """
-    total_precision = 0.0
-    num_images = len(detections)
-
-    for det, tgt in zip(detections, targets):
-        if len(det["boxes"]) == 0:
-            continue
-
-        # Get predicted boxes and ground truth boxes
-        pred_boxes = det["boxes"]
-        gt_boxes = tgt["boxes"]
-
-        if len(gt_boxes) == 0:
-            continue
-
-        # Calculate IoU between all predicted and ground truth boxes
-        ious = torchvision.ops.box_iou(pred_boxes, gt_boxes)
-
-        # For each predicted box, find the maximum IoU with any ground truth box
-        max_ious, _ = ious.max(dim=1)
-
-        # Count true positives (predictions with IoU > threshold)
-        true_positives = (max_ious > iou_threshold).sum().item()
-
-        # Calculate precision for this image
-        precision = true_positives / len(pred_boxes) if len(pred_boxes) > 0 else 0.0
-        total_precision += precision
-
-    # Average precision across all images
-    return total_precision / num_images if num_images > 0 else 0.0
