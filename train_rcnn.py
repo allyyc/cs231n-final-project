@@ -224,17 +224,27 @@ class YOLOAugmentation:
             cx_new = cx * cos_a - cy * sin_a + w / 2 * (1 - cos_a) + h / 2 * sin_a
             cy_new = cx * sin_a + cy * cos_a + h / 2 * (1 - cos_a) - w / 2 * sin_a
 
-            # Convert back to box format
-            boxes[:, 0] = cx_new - width / 2
-            boxes[:, 1] = cy_new - height / 2
-            boxes[:, 2] = cx_new + width / 2
-            boxes[:, 3] = cy_new + height / 2
+            # Convert back to box format and ensure minimum size
+            boxes[:, 0] = torch.clamp(cx_new - width / 2, 0, w - 1)
+            boxes[:, 1] = torch.clamp(cy_new - height / 2, 0, h - 1)
+            boxes[:, 2] = torch.clamp(cx_new + width / 2, 1, w)
+            boxes[:, 3] = torch.clamp(cy_new + height / 2, 1, h)
 
-            # Clip boxes to image boundaries
-            boxes[:, 0] = torch.clamp(boxes[:, 0], 0, w)
-            boxes[:, 1] = torch.clamp(boxes[:, 1], 0, h)
-            boxes[:, 2] = torch.clamp(boxes[:, 2], 0, w)
-            boxes[:, 3] = torch.clamp(boxes[:, 3], 0, h)
+            # Ensure minimum box size
+            min_size = 1.0
+            width = boxes[:, 2] - boxes[:, 0]
+            height = boxes[:, 3] - boxes[:, 1]
+            mask = (width < min_size) | (height < min_size)
+            if mask.any():
+                # For boxes that are too small, expand them
+                boxes[mask, 0] = torch.clamp(
+                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, w - 1
+                )
+                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, w)
+                boxes[mask, 1] = torch.clamp(
+                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, h - 1
+                )
+                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, h)
 
             target["boxes"] = boxes
 
@@ -253,16 +263,26 @@ class YOLOAugmentation:
         # Translate boxes
         boxes = target["boxes"]
         if len(boxes) > 0:
-            boxes[:, 0] += translate_x
-            boxes[:, 1] += translate_y
-            boxes[:, 2] += translate_x
-            boxes[:, 3] += translate_y
+            boxes[:, 0] = torch.clamp(boxes[:, 0] + translate_x, 0, w - 1)
+            boxes[:, 1] = torch.clamp(boxes[:, 1] + translate_y, 0, h - 1)
+            boxes[:, 2] = torch.clamp(boxes[:, 2] + translate_x, 1, w)
+            boxes[:, 3] = torch.clamp(boxes[:, 3] + translate_y, 1, h)
 
-            # Clip boxes to image boundaries
-            boxes[:, 0] = torch.clamp(boxes[:, 0], 0, w)
-            boxes[:, 1] = torch.clamp(boxes[:, 1], 0, h)
-            boxes[:, 2] = torch.clamp(boxes[:, 2], 0, w)
-            boxes[:, 3] = torch.clamp(boxes[:, 3], 0, h)
+            # Ensure minimum box size
+            min_size = 1.0
+            width = boxes[:, 2] - boxes[:, 0]
+            height = boxes[:, 3] - boxes[:, 1]
+            mask = (width < min_size) | (height < min_size)
+            if mask.any():
+                # For boxes that are too small, expand them
+                boxes[mask, 0] = torch.clamp(
+                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, w - 1
+                )
+                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, w)
+                boxes[mask, 1] = torch.clamp(
+                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, h - 1
+                )
+                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, h)
 
             target["boxes"] = boxes
 
@@ -279,56 +299,37 @@ class YOLOAugmentation:
         # Scale boxes
         boxes = target["boxes"]
         if len(boxes) > 0:
-            boxes[:, 0] *= scale
-            boxes[:, 1] *= scale
-            boxes[:, 2] *= scale
-            boxes[:, 3] *= scale
+            boxes[:, 0] = torch.clamp(boxes[:, 0] * scale, 0, new_w - 1)
+            boxes[:, 1] = torch.clamp(boxes[:, 1] * scale, 0, new_h - 1)
+            boxes[:, 2] = torch.clamp(boxes[:, 2] * scale, 1, new_w)
+            boxes[:, 3] = torch.clamp(boxes[:, 3] * scale, 1, new_h)
+
+            # Ensure minimum box size
+            min_size = 1.0
+            width = boxes[:, 2] - boxes[:, 0]
+            height = boxes[:, 3] - boxes[:, 1]
+            mask = (width < min_size) | (height < min_size)
+            if mask.any():
+                # For boxes that are too small, expand them
+                boxes[mask, 0] = torch.clamp(
+                    boxes[mask, 0] - (min_size - width[mask]) / 2, 0, new_w - 1
+                )
+                boxes[mask, 2] = torch.clamp(boxes[mask, 0] + min_size, 1, new_w)
+                boxes[mask, 1] = torch.clamp(
+                    boxes[mask, 1] - (min_size - height[mask]) / 2, 0, new_h - 1
+                )
+                boxes[mask, 3] = torch.clamp(boxes[mask, 1] + min_size, 1, new_h)
+
             target["boxes"] = boxes
 
         return image, target
 
     def _shear_image_and_boxes(self, image, target, shear_x, shear_y):
-        # Convert shear to degrees
-        shear_x = shear_x * 180 / np.pi
-        shear_y = shear_y * 180 / np.pi
-
-        # Shear image
-        image = F.affine(
-            image, angle=0, translate=(0, 0), scale=1.0, shear=(shear_x, shear_y)
-        )
-
-        # TODO: Implement box shearing (complex transformation)
-        # For now, we'll just return the sheared image with original boxes
+        # For now, skip shear augmentation as it's complex to maintain valid boxes
         return image, target
 
     def _perspective_transform(self, image, target):
-        w, h = image.size
-        # Generate random perspective transform
-        startpoints = [[0, 0], [w, 0], [0, h], [w, h]]
-        endpoints = [
-            [
-                random.uniform(-w * self.perspective, w * self.perspective),
-                random.uniform(-h * self.perspective, h * self.perspective),
-            ],
-            [
-                w + random.uniform(-w * self.perspective, w * self.perspective),
-                random.uniform(-h * self.perspective, h * self.perspective),
-            ],
-            [
-                random.uniform(-w * self.perspective, w * self.perspective),
-                h + random.uniform(-h * self.perspective, h * self.perspective),
-            ],
-            [
-                w + random.uniform(-w * self.perspective, w * self.perspective),
-                h + random.uniform(-h * self.perspective, h * self.perspective),
-            ],
-        ]
-
-        # Apply perspective transform to image
-        image = F.perspective(image, startpoints, endpoints)
-
-        # TODO: Implement box perspective transform (complex transformation)
-        # For now, we'll just return the transformed image with original boxes
+        # For now, skip perspective transform as it's complex to maintain valid boxes
         return image, target
 
     def _flip_horizontal(self, image, target):
@@ -340,6 +341,11 @@ class YOLOAugmentation:
         if len(boxes) > 0:
             w = image.size[0]
             boxes[:, [0, 2]] = w - boxes[:, [2, 0]]
+            # Ensure x1 < x2
+            boxes[:, 0], boxes[:, 2] = (
+                torch.min(boxes[:, [0, 2]], dim=1)[0],
+                torch.max(boxes[:, [0, 2]], dim=1)[0],
+            )
             target["boxes"] = boxes
 
         return image, target
@@ -353,36 +359,56 @@ class YOLOAugmentation:
         if len(boxes) > 0:
             h = image.size[1]
             boxes[:, [1, 3]] = h - boxes[:, [3, 1]]
+            # Ensure y1 < y2
+            boxes[:, 1], boxes[:, 3] = (
+                torch.min(boxes[:, [1, 3]], dim=1)[0],
+                torch.max(boxes[:, [1, 3]], dim=1)[0],
+            )
             target["boxes"] = boxes
 
         return image, target
 
 
 # Define the training, validation, and test datasets
+train_transform = T.Compose(
+    [
+        # Color augmentations (HSV-like)
+        T.ColorJitter(
+            brightness=0.4,  # value
+            contrast=0.7,  # saturation-like
+            saturation=0.7,  # saturation
+            hue=0.015,  # hue
+        ),
+        # Geometric augmentations
+        T.RandomAffine(
+            degrees=10.0,  # rotation
+            translate=(0.1, 0.1),  # translation
+            scale=(0.5, 1.5),  # scale
+            shear=0.0,  # shear
+            fill=0,  # fill color for areas outside the image
+        ),
+        # Flips
+        T.RandomHorizontalFlip(p=0.5),  # horizontal flip
+        T.RandomVerticalFlip(p=0.0),  # vertical flip
+        # Convert to tensor
+        T.ToTensor(),
+    ]
+)
+
+# Validation and test transforms (just convert to tensor)
+val_transform = T.ToTensor()
+
+# Define the training, validation, and test datasets
 full_train_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/train",
     label_dir="wm_barriers_data/labels/train",
-    transform=YOLOAugmentation(
-        hsv_h=0.015,
-        hsv_s=0.7,
-        hsv_v=0.4,
-        degrees=10.0,
-        translate=0.1,
-        scale=0.5,
-        shear=0.0,
-        perspective=0.0,
-        flipud=0.0,
-        fliplr=0.5,
-        mosaic=0.0,
-        mixup=0.0,
-        cutmix=0.0,
-    ),
+    transform=train_transform,
 )
 
 full_val_dataset = YoloDetectionDataset(
     image_dir="wm_barriers_data/images/val",
     label_dir="wm_barriers_data/labels/val",
-    transform=T.ToTensor(),
+    transform=val_transform,
 )
 
 # Create small subsets for testing
