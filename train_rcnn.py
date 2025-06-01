@@ -100,10 +100,26 @@ test_dataset = YoloDetectionDataset(
     transform=transforms.ToTensor(),
 )
 
+
+def collate_fn(batch):
+    images = []
+    targets = []
+    for image, target in batch:
+        images.append(image)
+        targets.append(target)
+    return images, targets
+
+
 # Define the training, validation, and test data loaders
-train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
-test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=4)
+train_loader = DataLoader(
+    train_dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=collate_fn
+)
+val_loader = DataLoader(
+    val_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
+)
+test_loader = DataLoader(
+    test_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
+)
 
 # Move the model to the GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
