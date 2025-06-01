@@ -425,62 +425,68 @@ for epoch in range(num_epochs):
         train_pbar.set_postfix(
             {
                 "loss": f"{losses.item():.4f}",
-                "cls": f"{loss_dict['loss_classifier'].item():.4f}",
-                "box": f"{loss_dict['loss_box_reg'].item():.4f}",
+                "cls": f'{loss_dict["loss_classifier"].item():.4f}',
+                "box": f'{loss_dict["loss_box_reg"].item():.4f}',
             }
         )
 
     lr_scheduler.step()
 
+    # Validation phase
+    model.eval()
     val_loss = 0.0
     val_class_loss = 0.0
     val_box_loss = 0.0
+    metric = MeanAveragePrecision()  # Reset metric for this epoch
 
     # Create progress bar for validation
     val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
     with torch.no_grad():
         for images, targets in val_pbar:
-            # During validation, we still want to compute losses
-            images = list(image.to(device) for image in images)
+            images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            # During validation, we can also get predictions if needed
-            # predictions = model(images)  # This would give us the detection results
+            # Get predictions and losses
             loss_dict, detections = eval_forward(model, images, targets)
-            print(loss_dict)
             losses = sum(loss for loss in loss_dict.values())
 
+            # Update validation losses
             val_loss += losses.item()
             val_class_loss += loss_dict["loss_classifier"].item()
             val_box_loss += loss_dict["loss_box_reg"].item()
 
-            # Update progress bar with current loss
+            # Update mAP metric
+            # Convert targets to the format expected by the metric
+            metric.update(detections, targets)
+
+            # Update progress bar
             val_pbar.set_postfix(
                 {
                     "loss": f"{losses.item():.4f}",
-                    "class_loss": f'{loss_dict["loss_classifier"].item():.4f}',
-                    "box_loss": f'{loss_dict["loss_box_reg"].item():.4f}',
+                    "cls": f'{loss_dict["loss_classifier"].item():.4f}',
+                    "box": f'{loss_dict["loss_box_reg"].item():.4f}',
                 }
             )
-    # Calculate mAP
-    results = metric.compute()
-    map_50 = results["map_50"]
 
-    # Average the losses
-    avg_val_loss = val_loss / len(val_loader)
-    avg_val_class_loss = val_class_loss / len(val_loader)
-    avg_val_box_loss = val_box_loss / len(val_loader)
+    # Calculate mAP@50
+    map_results = metric.compute()
+    map_50 = map_results["map_50"].item()  # Get mAP@50 specifically
 
     # Print epoch summary
     print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
     print(
-        f"Train - Avg Loss: {train_loss / len(train_loader):.4f}, Class Loss: {train_class_loss / len(train_loader):.4f}, Box Loss: {train_box_loss / len(train_loader):.4f}"
+        f"Train - Avg Loss: {train_loss / len(train_loader):.4f}, "
+        f"Class Loss: {train_class_loss / len(train_loader):.4f}, "
+        f"Box Loss: {train_box_loss / len(train_loader):.4f}"
     )
     print(
-        f"Val   - Loss: {avg_val_loss:.4f}, Class Loss: {avg_val_class_loss:.4f}, Box Loss: {avg_val_box_loss:.4f}"
+        f"Val   - Avg Loss: {val_loss / len(val_loader):.4f}, "
+        f"Class Loss: {val_class_loss / len(val_loader):.4f}, "
+        f"Box Loss: {val_box_loss / len(val_loader):.4f}"
     )
     print(f"mAP@50: {map_50:.4f}\n")
 
+    # Log metrics
     experiment.log_metric("mAP@50", map_50, step=epoch)
     experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
     experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
