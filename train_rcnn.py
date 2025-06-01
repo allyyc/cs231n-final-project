@@ -58,16 +58,35 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
         boxes = []
         labels = []
 
-        with open(label_path, "r") as f:
-            for line in f:
-                label, x, y, w, h = line.strip().split()
-                x = float(x) * img_width
-                y = float(y) * img_height
-                w = float(w) * img_width
-                h = float(h) * img_height
-                boxes.append([x, y, w, h])
-                labels.append(int(label))
-        return torch.tensor(boxes), torch.tensor(labels)
+        try:
+            with open(label_path, "r") as f:
+                for line in f:
+                    label, x, y, w, h = line.strip().split()
+                    x = float(x) * img_width
+                    y = float(y) * img_height
+                    w = float(w) * img_width
+                    h = float(h) * img_height
+                    # Convert from [x, y, w, h] to [x1, y1, x2, y2] format
+                    x1 = x - w / 2
+                    y1 = y - h / 2
+                    x2 = x + w / 2
+                    y2 = y + h / 2
+                    boxes.append([x1, y1, x2, y2])
+                    labels.append(
+                        int(label) + 1
+                    )  # Add 1 to make labels 1-indexed (0 is background)
+        except FileNotFoundError:
+            print(f"Warning: Label file {label_path} not found")
+
+        # If no boxes were found, add a dummy box
+        if len(boxes) == 0:
+            # Add a small box in the corner with background class (0)
+            boxes = [[0, 0, 10, 10]]
+            labels = [0]  # Background class
+
+        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
+            labels, dtype=torch.int64
+        )
 
     def __getitem__(self, idx):
         image_path = os.path.join(self.image_dir, self.image_files[idx])
