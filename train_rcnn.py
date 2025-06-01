@@ -604,7 +604,7 @@ for epoch in range(num_epochs):
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         # Get model predictions
-        predictions = model(images)
+        predictions = model(images, targets)
 
         # Compute custom loss
         batch_losses = []
