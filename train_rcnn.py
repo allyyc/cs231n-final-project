@@ -295,6 +295,10 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
             labels.append(0)
             boxes.append([0, 0, 0, 0])
 
+        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(
+            labels, dtype=torch.int64
+        )
+
     def __getitem__(self, idx):
         image_path = os.path.join(self.image_dir, self.image_files[idx])
         label_path = os.path.join(self.label_dir, self.label_files[idx])
