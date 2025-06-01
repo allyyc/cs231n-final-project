@@ -436,6 +436,8 @@ for epoch in range(num_epochs):
         map_50 = map_results["map_50"].item()
         map_50_95 = map_results["map"].item()  # This is mAP@50:95
 
+        print(map_results.keys())
+
         # Get precision and recall at different detection thresholds
         precision = (
             map_results["precision"].mean().item()
