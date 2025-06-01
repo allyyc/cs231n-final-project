@@ -437,7 +437,7 @@ for epoch in range(num_epochs):
     val_loss = 0.0
     val_class_loss = 0.0
     val_box_loss = 0.0
-    metric = MeanAveragePrecision()  # Reset metric for this epoch
+    metric = metric.reset()  # Reset metric for this epoch
 
     # Create progress bar for validation
     val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
