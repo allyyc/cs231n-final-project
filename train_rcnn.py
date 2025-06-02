@@ -27,6 +27,7 @@ from torchvision.models.detection.rpn import concat_box_prediction_layers
 
 from torchmetrics.detection import MeanAveragePrecision
 
+
 def calculate_precision(detections, targets, iou_threshold=0.5):
     """
     Calculate precision for a batch of detections.
@@ -313,6 +314,7 @@ val_dataset = YoloDetectionDataset(
     transform=val_transform,
 )
 
+
 def collate_fn(batch):
     images = []
     targets = []
@@ -538,7 +540,7 @@ for epoch in range(num_epochs):
     )
 
 # Save the model
-torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn.pth")
+torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_1.pth")
 
 
 # Add inference function
@@ -567,4 +569,3 @@ def predict(model, image):
     # Remove batch dimension and move to CPU
     predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions][0]
     return predictions
-
