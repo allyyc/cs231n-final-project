@@ -60,7 +60,7 @@ if __name__ == "__main__":
     parser.add_argument("--scale", type=float, default=None)
     parser.add_argument("--fliplr", type=float, default=None)
     parser.add_argument("--mosaic", type=float, default=None)
-    parser.add_argument("--erasing", type=float, default=None).
+    parser.add_argument("--erasing", type=float, default=None)
     parser.add_argument("--auto_augment", type=str, default=None)
     parser.add_argument("--degrees", type=float, default=None)
     parser.add_argument("--mixup", type=float, default=None)
