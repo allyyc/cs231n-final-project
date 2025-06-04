@@ -270,51 +270,7 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
             image = self.transform(image)
 
         return image, target
-
-
-# Define the training, validation, and test datasets
-train_transform = T.Compose(
-    [
-        # Color augmentations (HSV-like)
-        T.ColorJitter(
-            brightness=0.4,  # value
-            contrast=0.7,  # saturation-like
-            saturation=0.7,  # saturation
-            hue=0.015,  # hue
-        ),
-        # Geometric augmentations
-        T.RandomAffine(
-            degrees=10.0,  # rotation
-            translate=(0.1, 0.1),  # translation
-            scale=(0.5, 1.5),  # scale
-            shear=0.0,  # shear
-            fill=0,  # fill color for areas outside the image
-        ),
-        # Flips
-        T.RandomHorizontalFlip(p=0.5),  # horizontal flip
-        T.RandomVerticalFlip(p=0.0),  # vertical flip
-        # Convert to tensor
-        T.ToTensor(),
-    ]
-)
-
-# Validation and test transforms (just convert to tensor)
-val_transform = T.ToTensor()
-
-# Define the training, validation, and test datasets
-train_dataset = YoloDetectionDataset(
-    image_dir="wm_barriers_data/images/train",
-    label_dir="wm_barriers_data/labels/train",
-    transform=train_transform,
-)
-
-val_dataset = YoloDetectionDataset(
-    image_dir="wm_barriers_data/images/val",
-    label_dir="wm_barriers_data/labels/val",
-    transform=val_transform,
-)
-
-
+    
 def collate_fn(batch):
     images = []
     targets = []
@@ -322,226 +278,6 @@ def collate_fn(batch):
         images.append(image)
         targets.append(target)
     return images, targets
-
-
-# Define the training, validation, and test data loaders
-train_loader = DataLoader(
-    train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
-)
-val_loader = DataLoader(
-    val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
-)
-
-# Move the model to the GPU if available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-
-# Define the optimizer
-params = [p for p in model.parameters() if p.requires_grad]
-optimizer = torch.optim.SGD(
-    model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005
-)
-
-# Define the metric
-metric = MeanAveragePrecision()
-
-# Define the learning rate scheduler
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
-
-# Define the training loop
-num_epochs = 50  # Reduced from 100 to 2 for testing
-for epoch in range(num_epochs):
-    model.train()
-    train_loss = 0.0
-    train_class_loss = 0.0
-    train_box_loss = 0.0
-    train_loss_objectness = 0.0
-    train_loss_rpn_box_reg = 0.0
-
-    # Create progress bar for training
-    train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
-    for images, targets in train_pbar:
-        images = [img.to(device) for img in images]
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-        # Get model predictions (returns a dict of losses)
-        loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
-
-        optimizer.zero_grad()
-        losses.backward()
-        optimizer.step()
-
-        # Accumulate losses
-        train_loss += losses.item()
-        train_class_loss += loss_dict["loss_classifier"].item()
-        train_box_loss += loss_dict["loss_box_reg"].item()
-        train_loss_objectness += loss_dict["loss_objectness"].item()
-        train_loss_rpn_box_reg += loss_dict["loss_rpn_box_reg"].item()
-
-        # Update progress bar
-        train_pbar.set_postfix(
-            {
-                "loss": f"{losses.item():.4f}",
-                "cls": f'{loss_dict["loss_classifier"].item():.4f}',
-                "box": f'{loss_dict["loss_box_reg"].item():.4f}',
-            }
-        )
-
-    lr_scheduler.step()
-
-    if epoch % 5 == 0:
-        # Validation phase
-        model.eval()
-        val_loss = 0.0
-        val_class_loss = 0.0
-        val_box_loss = 0.0
-        val_loss_objectness = 0.0
-        val_loss_rpn_box_reg = 0.0
-
-        # Initialize metric with specific settings
-        metric = MeanAveragePrecision(
-            box_format="xyxy",  # Our boxes are in [x1, y1, x2, y2] format
-            iou_thresholds=[
-                0.5,
-                0.55,
-                0.6,
-                0.65,
-                0.7,
-                0.75,
-                0.8,
-                0.85,
-                0.9,
-                0.95,
-            ],  # IoU thresholds for mAP@50:95
-            class_metrics=True,  # Get per-class metrics
-            max_detection_thresholds=[
-                1,
-                10,
-                100,
-            ],  # Add detection thresholds for precision/recall
-        )
-
-        # Create progress bar for validation
-        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
-        with torch.no_grad():
-            for images, targets in val_pbar:
-                images = [img.to(device) for img in images]
-                targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-                # Get predictions and losses
-                loss_dict, detections = eval_forward(model, images, targets)
-                losses = sum(loss for loss in loss_dict.values())
-
-                # Update validation losses
-                val_loss += losses.item()
-                val_class_loss += loss_dict["loss_classifier"].item()
-                val_box_loss += loss_dict["loss_box_reg"].item()
-
-                # Update mAP metric
-                metric.update(detections, targets)
-
-                # Update progress bar
-                val_pbar.set_postfix(
-                    {
-                        "loss": f"{losses.item():.4f}",
-                        "cls": f'{loss_dict["loss_classifier"].item():.4f}',
-                        "box": f'{loss_dict["loss_box_reg"].item():.4f}',
-                        "objectness": f'{loss_dict["loss_objectness"].item():.4f}',
-                        "rpn_box_reg": f'{loss_dict["loss_rpn_box_reg"].item():.4f}',
-                    }
-                )
-
-        # Calculate mAP@50 and other metrics
-        map_results = metric.compute()
-        map_50 = map_results["map_50"].item()
-        map_50_95 = map_results["map"].item()  # This is mAP@50:95
-
-        # Calculate precision at different IoU thresholds
-        precision_50 = calculate_precision(detections, targets, iou_threshold=0.5)
-        precision_75 = calculate_precision(detections, targets, iou_threshold=0.75)
-
-        # Get recall metrics using available keys
-        recall_1 = map_results["mar_1"].item()  # Recall at 1 detection
-        recall_10 = map_results["mar_10"].item()  # Recall at 10 detections
-        recall_100 = map_results["mar_100"].item()  # Recall at 100 detections
-
-        # Print detailed metrics
-        print("\nDetailed Metrics:")
-        print(f"mAP@50: {map_50:.4f}")
-        print(f"mAP@50:95: {map_50_95:.4f}")
-        print(f"mAP@75: {map_results['map_75'].item():.4f}")
-        print("\nPrecision at different IoU thresholds:")
-        print(f"Precision@IoU=0.5: {precision_50:.4f}")
-        print(f"Precision@IoU=0.75: {precision_75:.4f}")
-        print("\nRecall at different detection thresholds:")
-        print(f"Recall@1: {recall_1:.4f}")
-        print(f"Recall@10: {recall_10:.4f}")
-        print(f"Recall@100: {recall_100:.4f}")
-
-        # Print size-based metrics
-        print("\nSize-based Metrics:")
-        print(f"mAP (small objects): {map_results['map_small'].item():.4f}")
-        print(f"mAP (medium objects): {map_results['map_medium'].item():.4f}")
-        print(f"mAP (large objects): {map_results['map_large'].item():.4f}")
-
-        if "map_per_class" in map_results:
-            print("\nPer-class mAP@50:")
-            for class_id, class_map in enumerate(map_results["map_per_class"]):
-                print(f"Class {class_id}: {class_map.item():.4f}")
-
-        print(
-            f"Val   - Avg Loss: {val_loss / len(val_loader):.4f}, "
-            f"Class Loss: {val_class_loss / len(val_loader):.4f}, "
-            f"Box Loss: {val_box_loss / len(val_loader):.4f}, "
-            f"Objectness Loss: {val_loss_objectness / len(val_loader):.4f}, "
-            f"RPN Box Reg Loss: {val_loss_rpn_box_reg / len(val_loader):.4f}"
-        )
-
-    # Print epoch summary
-    print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
-    print(
-        f"Train - Avg Loss: {train_loss / len(train_loader):.4f}, "
-        f"Class Loss: {train_class_loss / len(train_loader):.4f}, "
-        f"Box Loss: {train_box_loss / len(train_loader):.4f}, "
-        f"Objectness Loss: {train_loss_objectness / len(train_loader):.4f}, "
-        f"RPN Box Reg Loss: {train_loss_rpn_box_reg / len(train_loader):.4f}"
-    )
-
-    # Log metrics
-    experiment.log_metric("mAP@50", map_50, step=epoch)
-    experiment.log_metric("mAP@50:95", map_50_95, step=epoch)
-    experiment.log_metric("mAP@75", map_results["map_75"].item(), step=epoch)
-    experiment.log_metric("precision@50", precision_50, step=epoch)
-    experiment.log_metric("precision@75", precision_75, step=epoch)
-    experiment.log_metric("recall@1", recall_1, step=epoch)
-    experiment.log_metric("recall@10", recall_10, step=epoch)
-    experiment.log_metric("recall@100", recall_100, step=epoch)
-    experiment.log_metric("map_small", map_results["map_small"].item(), step=epoch)
-    experiment.log_metric("map_medium", map_results["map_medium"].item(), step=epoch)
-    experiment.log_metric("map_large", map_results["map_large"].item(), step=epoch)
-    experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
-    experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
-    experiment.log_metric(
-        "train_class_loss", train_class_loss / len(train_loader), step=epoch
-    )
-    experiment.log_metric(
-        "val_class_loss", val_class_loss / len(val_loader), step=epoch
-    )
-    experiment.log_metric(
-        "train_box_loss", train_box_loss / len(train_loader), step=epoch
-    )
-    experiment.log_metric("val_box_loss", val_box_loss / len(val_loader), step=epoch)
-    experiment.log_metric(
-        "train_loss_objectness", train_loss_objectness / len(train_loader), step=epoch
-    )
-    experiment.log_metric(
-        "val_loss_objectness", val_loss_objectness / len(val_loader), step=epoch
-    )
-
-# Save the model
-torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_1.pth")
-
 
 # Add inference function
 def predict(model, image):
@@ -569,3 +305,271 @@ def predict(model, image):
     # Remove batch dimension and move to CPU
     predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions][0]
     return predictions
+
+
+def main():
+    # Define the training, validation, and test datasets
+    train_transform = T.Compose(
+        [
+            # Color augmentations (HSV-like)
+            T.ColorJitter(
+                brightness=0.4,  # value
+                contrast=0.7,  # saturation-like
+                saturation=0.7,  # saturation
+                hue=0.015,  # hue
+            ),
+            # Geometric augmentations
+            T.RandomAffine(
+                degrees=10.0,  # rotation
+                translate=(
+                    -0.1,
+                    0.1,
+                ),  # translation range from -10% to +10% in both x and y
+                scale=(0.5, 1.5),  # scale
+                shear=0.0,  # shear
+                fill=0,  # fill color for areas outside the image
+            ),
+            # Flips
+            T.RandomHorizontalFlip(p=0.5),  # horizontal flip
+            T.RandomVerticalFlip(p=0.0),  # vertical flip
+            # Convert to tensor
+            T.ToTensor(),
+        ]
+    )
+
+    # Validation and test transforms (just convert to tensor)
+    val_transform = T.ToTensor()
+
+    # Define the training, validation, and test datasets
+    train_dataset = YoloDetectionDataset(
+        image_dir="wm_barriers_data/images/train",
+        label_dir="wm_barriers_data/labels/train",
+        transform=train_transform,
+    )
+
+    val_dataset = YoloDetectionDataset(
+        image_dir="wm_barriers_data/images/val",
+        label_dir="wm_barriers_data/labels/val",
+        transform=val_transform,
+    )
+
+    # Define the training, validation, and test data loaders
+    train_loader = DataLoader(
+        train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
+    )
+
+    # Move the model to the GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    # Define the optimizer
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005
+    )
+
+    # Define the metric
+    metric = MeanAveragePrecision()
+
+    # Define the learning rate scheduler
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+
+    # Define the training loop
+    num_epochs = 50  # Reduced from 100 to 2 for testing
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        train_class_loss = 0.0
+        train_box_loss = 0.0
+        train_loss_objectness = 0.0
+        train_loss_rpn_box_reg = 0.0
+
+        # Create progress bar for training
+        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+        for images, targets in train_pbar:
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+            # Get model predictions (returns a dict of losses)
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+
+            optimizer.zero_grad()
+            losses.backward()
+            optimizer.step()
+
+            # Accumulate losses
+            train_loss += losses.item()
+            train_class_loss += loss_dict["loss_classifier"].item()
+            train_box_loss += loss_dict["loss_box_reg"].item()
+            train_loss_objectness += loss_dict["loss_objectness"].item()
+            train_loss_rpn_box_reg += loss_dict["loss_rpn_box_reg"].item()
+
+            # Update progress bar
+            train_pbar.set_postfix(
+                {
+                    "loss": f"{losses.item():.4f}",
+                    "cls": f'{loss_dict["loss_classifier"].item():.4f}',
+                    "box": f'{loss_dict["loss_box_reg"].item():.4f}',
+                }
+            )
+
+        lr_scheduler.step()
+
+        if epoch % 5 == 0:
+            # Validation phase
+            model.eval()
+            val_loss = 0.0
+            val_class_loss = 0.0
+            val_box_loss = 0.0
+            val_loss_objectness = 0.0
+            val_loss_rpn_box_reg = 0.0
+
+            # Initialize metric with specific settings
+            metric = MeanAveragePrecision(
+                box_format="xyxy",  # Our boxes are in [x1, y1, x2, y2] format
+                iou_thresholds=[
+                    0.5,
+                    0.55,
+                    0.6,
+                    0.65,
+                    0.7,
+                    0.75,
+                    0.8,
+                    0.85,
+                    0.9,
+                    0.95,
+                ],  # IoU thresholds for mAP@50:95
+                class_metrics=True,  # Get per-class metrics
+                max_detection_thresholds=[
+                    1,
+                    10,
+                    100,
+                ],  # Add detection thresholds for precision/recall
+            )
+
+            # Create progress bar for validation
+            val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+            with torch.no_grad():
+                for images, targets in val_pbar:
+                    images = [img.to(device) for img in images]
+                    targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+                    # Get predictions and losses
+                    loss_dict, detections = eval_forward(model, images, targets)
+                    losses = sum(loss for loss in loss_dict.values())
+
+                    # Update validation losses
+                    val_loss += losses.item()
+                    val_class_loss += loss_dict["loss_classifier"].item()
+                    val_box_loss += loss_dict["loss_box_reg"].item()
+
+                    # Update mAP metric
+                    metric.update(detections, targets)
+
+                    # Update progress bar
+                    val_pbar.set_postfix(
+                        {
+                            "loss": f"{losses.item():.4f}",
+                            "cls": f'{loss_dict["loss_classifier"].item():.4f}',
+                            "box": f'{loss_dict["loss_box_reg"].item():.4f}',
+                            "objectness": f'{loss_dict["loss_objectness"].item():.4f}',
+                            "rpn_box_reg": f'{loss_dict["loss_rpn_box_reg"].item():.4f}',
+                        }
+                    )
+
+            # Calculate mAP@50 and other metrics
+            map_results = metric.compute()
+            map_50 = map_results["map_50"].item()
+            map_50_95 = map_results["map"].item()  # This is mAP@50:95
+
+            # Calculate precision at different IoU thresholds
+            precision_50 = calculate_precision(detections, targets, iou_threshold=0.5)
+            precision_75 = calculate_precision(detections, targets, iou_threshold=0.75)
+
+            # Get recall metrics using available keys
+            recall_1 = map_results["mar_1"].item()  # Recall at 1 detection
+            recall_10 = map_results["mar_10"].item()  # Recall at 10 detections
+            recall_100 = map_results["mar_100"].item()  # Recall at 100 detections
+
+            # Print detailed metrics
+            print("\nDetailed Metrics:")
+            print(f"mAP@50: {map_50:.4f}")
+            print(f"mAP@50:95: {map_50_95:.4f}")
+            print(f"mAP@75: {map_results['map_75'].item():.4f}")
+            print("\nPrecision at different IoU thresholds:")
+            print(f"Precision@IoU=0.5: {precision_50:.4f}")
+            print(f"Precision@IoU=0.75: {precision_75:.4f}")
+            print("\nRecall at different detection thresholds:")
+            print(f"Recall@1: {recall_1:.4f}")
+            print(f"Recall@10: {recall_10:.4f}")
+            print(f"Recall@100: {recall_100:.4f}")
+
+            # Print size-based metrics
+            print("\nSize-based Metrics:")
+            print(f"mAP (small objects): {map_results['map_small'].item():.4f}")
+            print(f"mAP (medium objects): {map_results['map_medium'].item():.4f}")
+            print(f"mAP (large objects): {map_results['map_large'].item():.4f}")
+
+            if "map_per_class" in map_results:
+                print("\nPer-class mAP@50:")
+                for class_id, class_map in enumerate(map_results["map_per_class"]):
+                    print(f"Class {class_id}: {class_map.item():.4f}")
+
+            print(
+                f"Val   - Avg Loss: {val_loss / len(val_loader):.4f}, "
+                f"Class Loss: {val_class_loss / len(val_loader):.4f}, "
+                f"Box Loss: {val_box_loss / len(val_loader):.4f}, "
+                f"Objectness Loss: {val_loss_objectness / len(val_loader):.4f}, "
+                f"RPN Box Reg Loss: {val_loss_rpn_box_reg / len(val_loader):.4f}"
+            )
+
+        # Print epoch summary
+        print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
+        print(
+            f"Train - Avg Loss: {train_loss / len(train_loader):.4f}, "
+            f"Class Loss: {train_class_loss / len(train_loader):.4f}, "
+            f"Box Loss: {train_box_loss / len(train_loader):.4f}, "
+            f"Objectness Loss: {train_loss_objectness / len(train_loader):.4f}, "
+            f"RPN Box Reg Loss: {train_loss_rpn_box_reg / len(train_loader):.4f}"
+        )
+
+        # Log metrics
+        experiment.log_metric("mAP@50", map_50, step=epoch)
+        experiment.log_metric("mAP@50:95", map_50_95, step=epoch)
+        experiment.log_metric("mAP@75", map_results["map_75"].item(), step=epoch)
+        experiment.log_metric("precision@50", precision_50, step=epoch)
+        experiment.log_metric("precision@75", precision_75, step=epoch)
+        experiment.log_metric("recall@1", recall_1, step=epoch)
+        experiment.log_metric("recall@10", recall_10, step=epoch)
+        experiment.log_metric("recall@100", recall_100, step=epoch)
+        experiment.log_metric("map_small", map_results["map_small"].item(), step=epoch)
+        experiment.log_metric("map_medium", map_results["map_medium"].item(), step=epoch)
+        experiment.log_metric("map_large", map_results["map_large"].item(), step=epoch)
+        experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
+        experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
+        experiment.log_metric(
+            "train_class_loss", train_class_loss / len(train_loader), step=epoch
+        )
+        experiment.log_metric(
+            "val_class_loss", val_class_loss / len(val_loader), step=epoch
+        )
+        experiment.log_metric(
+            "train_box_loss", train_box_loss / len(train_loader), step=epoch
+        )
+        experiment.log_metric("val_box_loss", val_box_loss / len(val_loader), step=epoch)
+        experiment.log_metric(
+            "train_loss_objectness", train_loss_objectness / len(train_loader), step=epoch
+        )
+        experiment.log_metric(
+            "val_loss_objectness", val_loss_objectness / len(val_loader), step=epoch
+        )
+
+    # Save the model
+    torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_1.pth")
+
+if __name__ == "__main__":
+    main()
