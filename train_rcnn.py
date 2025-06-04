@@ -380,7 +380,7 @@ def main():
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
     # Define the training loop
-    num_epochs = 50  # Reduced from 100 to 2 for testing
+    num_epochs = 25  # Reduced from 100 to 2 for testing
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
@@ -581,4 +581,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nTraining interrupted. Saving model...")
+        torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_early_exit.pth")
+        print("Model saved. Exiting gracefully.")
