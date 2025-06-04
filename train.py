@@ -34,6 +34,20 @@ def main(args):
         train_args["auto_augment"] = args.auto_augment
     if args.perspective is not None:
         train_args["perspective"] = args.perspective
+    if args.degrees is not None:
+        train_args["degrees"] = args.degrees
+    if args.mixup is not None:
+        train_args["mixup"] = args.mixup
+    if args.shear is not None:
+        train_args["shear"] = args.shear
+    if args.perspective is not None:
+        train_args["perspective"] = args.perspective
+    if args.cutmix is not None:
+        train_args["cutmix"] = args.cutmix
+    if args.mixup is not None:
+        train_args["mixup"] = args.mixup
+
+
 
     model.train(**train_args)
 
@@ -51,6 +65,12 @@ if __name__ == "__main__":
     parser.add_argument("--erasing", type=float, default=None)
     parser.add_argument("--auto_augment", type=str, default=None)
     parser.add_argument("--perspective", type=float, default=None)
+    parser.add_argument("--degrees", type=float, default=None)
+    parser.add_argument("--mixup", type=float, default=None)
+    parser.add_argument("--shear", type=float, default=None)
+    parser.add_argument("--perspective", type=float, default=None)
+    parser.add_argument("--cutmix", type=float, default=None)
+    parser.add_argument("--mixup", type=float, default=None)
 
     args = parser.parse_args()
     main(args)
