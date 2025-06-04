@@ -42,8 +42,6 @@ def main(args):
         train_args["perspective"] = args.perspective
     if args.cutmix is not None:
         train_args["cutmix"] = args.cutmix
-    if args.mixup is not None:
-        train_args["mixup"] = args.mixup
 
 
 
@@ -67,7 +65,6 @@ if __name__ == "__main__":
     parser.add_argument("--shear", type=float, default=None)
     parser.add_argument("--perspective", type=float, default=None)
     parser.add_argument("--cutmix", type=float, default=None)
-    parser.add_argument("--mixup", type=float, default=None)
 
     args = parser.parse_args()
     main(args)
