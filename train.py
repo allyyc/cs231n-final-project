@@ -32,8 +32,6 @@ def main(args):
         train_args["erasing"] = args.erasing
     if args.auto_augment is not None:
         train_args["auto_augment"] = args.auto_augment
-    if args.perspective is not None:
-        train_args["perspective"] = args.perspective
     if args.degrees is not None:
         train_args["degrees"] = args.degrees
     if args.mixup is not None:
@@ -62,9 +60,8 @@ if __name__ == "__main__":
     parser.add_argument("--scale", type=float, default=None)
     parser.add_argument("--fliplr", type=float, default=None)
     parser.add_argument("--mosaic", type=float, default=None)
-    parser.add_argument("--erasing", type=float, default=None)
+    parser.add_argument("--erasing", type=float, default=None).
     parser.add_argument("--auto_augment", type=str, default=None)
-    parser.add_argument("--perspective", type=float, default=None)
     parser.add_argument("--degrees", type=float, default=None)
     parser.add_argument("--mixup", type=float, default=None)
     parser.add_argument("--shear", type=float, default=None)
