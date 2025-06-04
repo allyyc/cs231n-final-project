@@ -270,7 +270,8 @@ class YoloDetectionDataset(torch.utils.data.Dataset):
             image = self.transform(image)
 
         return image, target
-    
+
+
 def collate_fn(batch):
     images = []
     targets = []
@@ -278,6 +279,7 @@ def collate_fn(batch):
         images.append(image)
         targets.append(target)
     return images, targets
+
 
 # Add inference function
 def predict(model, image):
@@ -355,10 +357,10 @@ def main():
 
     # Define the training, validation, and test data loaders
     train_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=collate_fn
+        train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
+        val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
     )
 
     # Move the model to the GPU if available
@@ -547,7 +549,9 @@ def main():
         experiment.log_metric("recall@10", recall_10, step=epoch)
         experiment.log_metric("recall@100", recall_100, step=epoch)
         experiment.log_metric("map_small", map_results["map_small"].item(), step=epoch)
-        experiment.log_metric("map_medium", map_results["map_medium"].item(), step=epoch)
+        experiment.log_metric(
+            "map_medium", map_results["map_medium"].item(), step=epoch
+        )
         experiment.log_metric("map_large", map_results["map_large"].item(), step=epoch)
         experiment.log_metric("train_loss", train_loss / len(train_loader), step=epoch)
         experiment.log_metric("val_loss", val_loss / len(val_loader), step=epoch)
@@ -560,9 +564,13 @@ def main():
         experiment.log_metric(
             "train_box_loss", train_box_loss / len(train_loader), step=epoch
         )
-        experiment.log_metric("val_box_loss", val_box_loss / len(val_loader), step=epoch)
         experiment.log_metric(
-            "train_loss_objectness", train_loss_objectness / len(train_loader), step=epoch
+            "val_box_loss", val_box_loss / len(val_loader), step=epoch
+        )
+        experiment.log_metric(
+            "train_loss_objectness",
+            train_loss_objectness / len(train_loader),
+            step=epoch,
         )
         experiment.log_metric(
             "val_loss_objectness", val_loss_objectness / len(val_loader), step=epoch
@@ -570,6 +578,7 @@ def main():
 
     # Save the model
     torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_1.pth")
+
 
 if __name__ == "__main__":
     main()
