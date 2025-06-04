@@ -322,7 +322,7 @@ def main():
             T.RandomAffine(
                 degrees=10.0,  # rotation
                 translate=(
-                    -0.1,
+                    0.1,
                     0.1,
                 ),  # translation range from -10% to +10% in both x and y
                 scale=(0.5, 1.5),  # scale
