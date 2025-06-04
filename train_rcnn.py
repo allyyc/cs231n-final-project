@@ -355,10 +355,10 @@ def main():
 
     # Define the training, validation, and test data loaders
     train_loader = DataLoader(
-        train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
+        train_dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=collate_fn
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
+        val_dataset, batch_size=4, shuffle=False, num_workers=4, collate_fn=collate_fn
     )
 
     # Move the model to the GPU if available
