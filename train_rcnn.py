@@ -28,6 +28,8 @@ from torchvision.models.detection.rpn import concat_box_prediction_layers
 
 from torchmetrics.detection import MeanAveragePrecision
 
+from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights
+
 
 def calculate_precision(detections, targets, iou_threshold=0.5):
     """
