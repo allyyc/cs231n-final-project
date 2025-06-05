@@ -309,7 +309,7 @@ def load_model(model_path=None, num_classes=5):
         model: The loaded or initialized Faster R-CNN model
     """
     # Initialize the model
-    model = fasterrcnn_resnet50_fpn(pretrained=True)
+    model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
 
     # Get the number of input features for the classifier
     in_features = model.roi_heads.box_predictor.cls_score.in_features
