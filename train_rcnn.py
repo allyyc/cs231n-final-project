@@ -188,21 +188,8 @@ def eval_forward(model, images, targets):
 # Initialize the experiment
 experiment = Experiment(api_key=os.getenv("COMET_API_KEY"))
 
-# Load the pre-trained Faster R-CNN model with a ResNet-50 backbone
-model = fasterrcnn_resnet50_fpn(pretrained=True)
-
-# Log the model
-experiment.log_model("faster_rcnn_resnet50_fpn", model)
-
 # Number of classes (your dataset classes + 1 for background)
 num_classes = 5
-
-# Get the number of input features for the classifier
-in_features = model.roi_heads.box_predictor.cls_score.in_features
-
-# Replace the head of the model with a new one (for the number of classes in your dataset)
-model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-
 
 # Define the YoloDetectionDataset class
 class YoloDetectionDataset(torch.utils.data.Dataset):
