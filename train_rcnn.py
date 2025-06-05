@@ -1,3 +1,4 @@
+import argparse
 from comet_ml import Experiment
 
 import torch
@@ -309,7 +310,70 @@ def predict(model, image):
     return predictions
 
 
+def load_model(model_path=None, num_classes=5):
+    """
+    Load a Faster R-CNN model, either from a saved state dict or initialize a new one.
+
+    Args:
+        model_path (str, optional): Path to the saved model state dict. If None, initializes a new model.
+        num_classes (int): Number of classes in the dataset (including background)
+
+    Returns:
+        model: The loaded or initialized Faster R-CNN model
+    """
+    # Initialize the model
+    model = fasterrcnn_resnet50_fpn(pretrained=True)
+
+    # Get the number of input features for the classifier
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+
+    # Replace the head of the model with a new one
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+    # Load state dict if provided
+    if model_path and os.path.exists(model_path):
+        print(f"Loading model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
+        print("Model loaded successfully")
+    else:
+        print("Initializing new model")
+
+    return model
+
+
 def main():
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Train Faster R-CNN model")
+    parser.add_argument(
+        "--load_model", type=str, help="Path to load model from (optional)"
+    )
+    parser.add_argument(
+        "--save_model",
+        type=str,
+        default="faster_rcnn_resnet50_fpn.pth",
+        help="Path to save model to (default: faster_rcnn_resnet50_fpn.pth)",
+    )
+    parser.add_argument(
+        "--num_epochs",
+        type=int,
+        default=25,
+        help="Number of epochs to train (default: 25)",
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=2, help="Batch size for training (default: 2)"
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=0.005,
+        help="Learning rate (default: 0.005)",
+    )
+
+    args = parser.parse_args()
+
+    # Load or initialize the model
+    model = load_model(args.load_model)
+
     # Define the training, validation, and test datasets
     train_transform = T.Compose(
         [
@@ -355,22 +419,30 @@ def main():
         transform=val_transform,
     )
 
-    # Define the training, validation, and test data loaders
+    # Update batch size from args
     train_loader = DataLoader(
-        train_dataset, batch_size=2, shuffle=True, num_workers=4, collate_fn=collate_fn
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=2, shuffle=False, num_workers=4, collate_fn=collate_fn
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=collate_fn,
     )
 
     # Move the model to the GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    # Define the optimizer
+    # Define the optimizer with learning rate from args
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(
-        model.parameters(), lr=0.005, momentum=0.9, weight_decay=0.0005
+        model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=0.0005
     )
 
     # Define the metric
@@ -380,7 +452,7 @@ def main():
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
     # Define the training loop
-    num_epochs = 25  # Reduced from 100 to 2 for testing
+    num_epochs = args.num_epochs
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
@@ -576,8 +648,9 @@ def main():
             "val_loss_objectness", val_loss_objectness / len(val_loader), step=epoch
         )
 
-    # Save the model
-    torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_1.pth")
+    # Save the model using the specified path
+    torch.save(model.state_dict(), args.save_model)
+    print(f"Model saved to {args.save_model}")
 
 
 if __name__ == "__main__":
@@ -585,5 +658,11 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nTraining interrupted. Saving model...")
-        torch.save(model.state_dict(), "faster_rcnn_resnet50_fpn_early_exit.pth")
-        print("Model saved. Exiting gracefully.")
+        # Get the save path from args even during interruption
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--save_model", type=str, default="faster_rcnn_resnet50_fpn_early_exit.pth"
+        )
+        args = parser.parse_args()
+        torch.save(model.state_dict(), args.save_model)
+        print(f"Model saved to {args.save_model}. Exiting gracefully.")
