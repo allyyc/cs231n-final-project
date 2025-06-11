@@ -13,18 +13,16 @@ def main(args):
         print(f"Starting training with base model: {args.model}")
         model = YOLO(args.model)
 
-    # Build training arguments with only user-provided augmentations
     train_args = {
         "data": "wm_barriers_data/data.yaml",
-        "epochs": args.epochs,  # Use epochs from command line
-        "batch": args.batch_size,  # Use batch size from command line
+        "epochs": args.epochs, 
+        "batch": args.batch_size, 
         "device": args.device,
         "resume": (
             True if args.resume else False
         ),  # Enable resume if checkpoint provided
     }
 
-    # Only add augmentation args if the user explicitly set them
     if args.hsv_h is not None:
         train_args["hsv_h"] = args.hsv_h
     if args.hsv_s is not None:
