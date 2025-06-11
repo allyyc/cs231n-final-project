@@ -262,7 +262,7 @@ def main():
     parser.add_argument(
         "--save_model",
         type=str,
-        default="faster_rcnn_resnet50_fpn.pth",
+        default="faster_rcnn_resnet50_fp_.pth",
         help="Path to save model to (default: faster_rcnn_resnet50_fpn.pth)",
     )
     parser.add_argument(
@@ -279,6 +279,12 @@ def main():
         type=float,
         default=0.005,
         help="Learning rate (default: 0.005)",
+    )
+    parser.add_argument(
+        "--epoch_interval",
+        type=int,
+        default=5,
+        help="Interval to evaluate model (default: 5)",
     )
 
     args = parser.parse_args()
@@ -399,7 +405,7 @@ def main():
         lr_scheduler.step()
 
         # Validation loop
-        if epoch % 5 == 0:
+        if epoch % epoch_interval == 0:
             model.eval()
             val_loss = 0.0
             val_loss_objectness = 0.0
@@ -532,7 +538,6 @@ def main():
     # Save the model using the specified path
     torch.save(model.state_dict(), args.save_model)
     print(f"Model saved to {args.save_model}")
-
 
 if __name__ == "__main__":
     main()
