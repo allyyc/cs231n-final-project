@@ -405,7 +405,7 @@ def main():
         lr_scheduler.step()
 
         # Validation loop
-        if epoch % epoch_interval == 0:
+        if epoch % args.epoch_interval == 0:
             model.eval()
             val_loss = 0.0
             val_loss_objectness = 0.0
