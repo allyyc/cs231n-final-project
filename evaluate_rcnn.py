@@ -12,30 +12,14 @@ from train_rcnn import YoloDetectionDataset, collate_fn, T
 import argparse
 from typing import Dict, List, Tuple
 
-# Add at the top of the file after imports
 CLASS_NAMES = ["step", "stair", "grab_bar", "ramp"]
-
 
 def load_model(
     model_path: str, num_classes: int = 5, device: str = "cuda"
 ) -> torch.nn.Module:
-    """
-    Load a trained Faster R-CNN model.
-
-    Args:
-        model_path: Path to the saved model weights
-        num_classes: Number of classes (including background)
-        device: Device to load the model on
-
-    Returns:
-        Loaded model
-    """
-    # Initialize model
     model = fasterrcnn_resnet50_fpn(pretrained=False)
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-
-    # Load weights
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
     model.eval()
@@ -47,17 +31,6 @@ def calculate_metrics(
     targets: List[Dict[str, torch.Tensor]],
     iou_threshold: float = 0.5,
 ) -> Dict[str, float]:
-    """
-    Calculate precision, recall, and other metrics for a single IoU threshold.
-
-    Args:
-        predictions: List of prediction dictionaries (boxes, labels, scores)
-        targets: List of target dictionaries (boxes, labels)
-        iou_threshold: IoU threshold for considering a detection as correct
-
-    Returns:
-        Dictionary containing precision, recall, and other metrics
-    """
     total_predictions = 0
     total_targets = 0
     true_positives = 0
@@ -75,13 +48,10 @@ def calculate_metrics(
         if len(pred_boxes) == 0 or len(gt_boxes) == 0:
             continue
 
-        # Calculate IoU between all predicted and ground truth boxes
         ious = torchvision.ops.box_iou(pred_boxes, gt_boxes)
 
-        # For each predicted box, find the maximum IoU with any ground truth box
         max_ious, max_gt_idx = ious.max(dim=1)
 
-        # Count true positives (predictions with IoU > threshold and matching label)
         for pred_idx, (iou, gt_idx) in enumerate(zip(max_ious, max_gt_idx)):
             if iou > iou_threshold and pred_labels[pred_idx] == gt_labels[gt_idx]:
                 true_positives += 1
@@ -104,23 +74,10 @@ def evaluate_model(
     device: str,
     class_names: List[str] = None,
 ) -> Dict[str, float]:
-    """
-    Evaluate the model on the given data loader.
-
-    Args:
-        model: The model to evaluate
-        data_loader: DataLoader containing the evaluation data
-        device: Device to run evaluation on
-        class_names: Optional list of class names for per-class metrics
-
-    Returns:
-        Dictionary containing all evaluation metrics
-    """
     model.eval()
     all_predictions = []
     all_targets = []
 
-    # Initialize metric
     metric = MeanAveragePrecision(
         box_format="xyxy",
         iou_thresholds=[0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95],
@@ -134,27 +91,20 @@ def evaluate_model(
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            # Get predictions
             predictions = model(images)
 
-            # Move predictions to CPU for metric calculation
             predictions = [{k: v.cpu() for k, v in p.items()} for p in predictions]
             targets = [{k: v.cpu() for k, v in t.items()} for t in targets]
 
-            # Update metric
             metric.update(predictions, targets)
 
-            # Store predictions and targets for additional metrics
             all_predictions.extend(predictions)
             all_targets.extend(targets)
 
-    # Calculate mAP metrics
     map_results = metric.compute()
 
-    # Calculate precision and recall at IoU=0.5
     metrics_50 = calculate_metrics(all_predictions, all_targets, iou_threshold=0.5)
 
-    # Print results
     print("\nEvaluation Results:")
     print(f"mAP@50: {map_results['map_50'].item():.4f}")
     print(f"mAP@50:95: {map_results['map'].item():.4f}")
@@ -172,11 +122,6 @@ def evaluate_model(
             )
             print(f"{class_name}: {class_map.item():.4f}")
 
-    # Print size-based metrics
-    print("\nSize-based Metrics:")
-    print(f"mAP (small objects): {map_results['map_small'].item():.4f}")
-    print(f"mAP (medium objects): {map_results['map_medium'].item():.4f}")
-    print(f"mAP (large objects): {map_results['map_large'].item():.4f}")
 
     # Combine all metrics
     results = {
@@ -184,9 +129,6 @@ def evaluate_model(
         "map_50_95": map_results["map"].item(),
         "precision_50": metrics_50["precision"],
         "recall_50": metrics_50["recall"],
-        "map_small": map_results["map_small"].item(),
-        "map_medium": map_results["map_medium"].item(),
-        "map_large": map_results["map_large"].item(),
     }
 
     if "map_per_class" in map_results:
@@ -230,7 +172,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # Create dataset and dataloader
     dataset = YoloDetectionDataset(
         image_dir=os.path.join(args.data_dir, f"images/{args.split}"),
         label_dir=os.path.join(args.data_dir, f"labels/{args.split}"),
@@ -249,10 +190,8 @@ def main():
     print(f"Dataset size: {len(dataset)} images")
     print("Classes:", ", ".join(CLASS_NAMES))
 
-    # Load model
     model = load_model(args.model_path, device=args.device)
 
-    # Run evaluation
     results = evaluate_model(model, data_loader, args.device, CLASS_NAMES)
 
     # Save results to file

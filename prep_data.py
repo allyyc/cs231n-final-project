@@ -10,7 +10,7 @@ def convert_cvat_to_yolo(xml_path):
 
     # Initialize YOLO format dict
     yolo_data = {
-        "path": "/Users/allisoncasasola/accessibility-barriers/wm_barriers_data", #  Dataset root directory
+        "path": "/Users/allisoncasasola/accessibility-barriers/wm_barriers_data",
         "train": "wm_barriers_data/images",
         "val": "wm_barriers_data/images",
         "test": "wm_barriers_data/images",
@@ -18,25 +18,22 @@ def convert_cvat_to_yolo(xml_path):
         "names": ["step", "stair", "grab_bar", "ramp"],  # Class names
     }
 
-    # Create .txt files
     for image in root.findall("image"):
         img_path = image.attrib["name"]
         img_id = image.attrib["id"]
         width = float(image.attrib["width"])
         height = float(image.attrib["height"])
 
-        # Create label file for this image
         label_path = os.path.join(
             "wm_barriers_data",
             img_path.replace("images/", "labels/").replace(".jpg", ".txt"),
         )
         os.makedirs(
             os.path.dirname(label_path), exist_ok=True
-        )  # Create labels directory if it doesn't exist
+        ) 
 
         with open(label_path, "w") as lf:
             for box in image.findall("box"):
-                # Get class id
                 label = box.attrib["label"]
                 class_id = yolo_data["names"].index(label)
 
@@ -65,6 +62,5 @@ def convert_cvat_to_yolo(xml_path):
 
 
 if __name__ == "__main__":
-    # Convert the annotations
     xml_path = os.path.join("wm_barriers_data", "wm_annotations.xml")
     convert_cvat_to_yolo(xml_path)

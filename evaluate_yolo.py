@@ -7,8 +7,6 @@ def main(model_path):
     results = model.val(data="wm_barriers_data/data.yaml")
 
     print("Class indices with average precision:", results.ap_class_index)
-    print("Average precision for all classes:", results.box.all_ap)
-    print("Average precision:", results.box.ap)
     print("Class indices for average precision:", results.box.ap_class_index)
     print("Class-specific results:", results.box.class_result)
     print("Mean average precision:", results.box.map)
