@@ -34,6 +34,6 @@ def main(model_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a YOLO model.")
-    parser.add_argument("model_path", type=str, help="Path to the YOLO .pt model file")
+    parser.add_argument("--model_path", type=str, help="Path to the YOLO .pt model file")
     args = parser.parse_args()
     main(args.model_path)
